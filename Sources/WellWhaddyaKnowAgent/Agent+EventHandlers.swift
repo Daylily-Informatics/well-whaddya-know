@@ -7,27 +7,32 @@ import Sensors
 extension Agent {
     
     // MARK: - Session State Changes (SPEC.md Section 5.4)
-    
+
     func handleSessionStateChange(_ sessionState: SessionState, source: SensorSource) async throws {
         let oldIsWorking = state.isWorking
-        
+
         // Update state from session probe
         state.isSessionOnConsole = sessionState.isOnConsole
         state.isScreenLocked = sessionState.isScreenLocked
-        
+
         let newIsWorking = state.isWorking
-        
+
+        // Notify accessibility sensor of working state change
+        if oldIsWorking != newIsWorking {
+            accessibilitySensor?.setWorkingState(newIsWorking)
+        }
+
         // Only emit if isWorking changed
         if oldIsWorking != newIsWorking {
             let timestampUs = Int64(sessionState.timestamp.timeIntervalSince1970 * 1_000_000)
-            
+
             try emitSystemStateEvent(
                 timestampUs: timestampUs,
                 monotonicNs: sessionState.monotonicNs,
                 kind: .stateChange,
                 source: source
             )
-            
+
             // If transitioning to working, emit activity event (SPEC.md 5.4)
             if newIsWorking {
                 try await emitInitialActivityEvent(timestampUs: timestampUs, monotonicNs: sessionState.monotonicNs)
@@ -100,33 +105,115 @@ extension Agent {
     }
     
     // MARK: - App Activation (SPEC.md Section 5.3)
-    
+
     func handleAppActivated(bundleId: String, displayName: String, pid: pid_t, timestamp: Date, monotonicNs: UInt64) async throws {
         // Only emit activity events when working (SPEC.md 5.4)
         guard state.isWorking else { return }
-        
+
         let timestampUs = Int64(timestamp.timeIntervalSince1970 * 1_000_000)
-        
+
         // Ensure app exists in dimension table
         let appId = try eventWriter.ensureApplication(
             bundleId: bundleId,
             displayName: displayName,
             firstSeenTsUs: timestampUs
         )
-        
+
         currentAppId = appId
         currentPid = pid
-        
-        // Emit activity event
+
+        // Start observing title changes for this app
+        accessibilitySensor?.startObserving(forPid: pid)
+
+        // Get initial title if permission granted
+        var titleId: Int64? = nil
+        var titleStatus = TitleStatus.noWindow
+        var axErrorCode: Int32? = nil
+
+        if hasAccessibilityPermission, let sensor = accessibilitySensor {
+            let result = sensor.readWindowTitle(for: pid)
+            titleStatus = TitleStatus(rawValue: result.status.rawValue) ?? .error
+            axErrorCode = result.axErrorCode
+
+            if let title = result.title {
+                titleId = try eventWriter.ensureWindowTitle(title: title, firstSeenTsUs: timestampUs)
+            }
+        } else if !hasAccessibilityPermission {
+            titleStatus = .noPermission
+        }
+
+        // Emit activity event with title info
         try eventWriter.insertRawActivityEvent(
             eventTsUs: timestampUs,
             eventMonotonicNs: monotonicNs,
             appId: appId,
             pid: pid,
-            titleId: nil as Int64?,  // Window title stubbed as NULL per task spec
-            titleStatus: TitleStatus.noWindow,  // No AX implementation yet
+            titleId: titleId,
+            titleStatus: titleStatus,
             reason: ActivityEventReason.appActivated,
-            isWorking: true
+            isWorking: true,
+            axErrorCode: axErrorCode
+        )
+    }
+
+    // MARK: - Title Changes (SPEC.md Section 3.4)
+
+    func handleTitleChanged(pid: pid_t, result: TitleReadResult, reason: TitleChangeReason, timestamp: Date, monotonicNs: UInt64) async throws {
+        // Only emit activity events when working (SPEC.md 5.4)
+        guard state.isWorking else { return }
+
+        // Need current app info
+        guard let appId = currentAppId else { return }
+
+        let timestampUs = Int64(timestamp.timeIntervalSince1970 * 1_000_000)
+
+        // Convert TitleReadStatus to TitleStatus
+        let titleStatus = TitleStatus(rawValue: result.status.rawValue) ?? .error
+
+        // Ensure window title exists if we have one
+        var titleId: Int64? = nil
+        if let title = result.title {
+            titleId = try eventWriter.ensureWindowTitle(title: title, firstSeenTsUs: timestampUs)
+        }
+
+        // Map TitleChangeReason to ActivityEventReason
+        let activityReason: ActivityEventReason
+        switch reason {
+        case .axTitleChanged:
+            activityReason = .axTitleChanged
+        case .axFocusedWindowChanged:
+            activityReason = .axFocusedWindowChanged
+        case .pollFallback:
+            activityReason = .pollFallback
+        }
+
+        try eventWriter.insertRawActivityEvent(
+            eventTsUs: timestampUs,
+            eventMonotonicNs: monotonicNs,
+            appId: appId,
+            pid: pid,
+            titleId: titleId,
+            titleStatus: titleStatus,
+            reason: activityReason,
+            isWorking: true,
+            axErrorCode: result.axErrorCode
+        )
+    }
+
+    // MARK: - Accessibility Permission Changes (SPEC.md Section 5.5.E)
+
+    func handleAccessibilityPermissionChanged(granted: Bool, timestamp: Date, monotonicNs: UInt64) async throws {
+        let timestampUs = Int64(timestamp.timeIntervalSince1970 * 1_000_000)
+
+        // Update local state
+        hasAccessibilityPermission = granted
+
+        // Emit system_state_event for permission change
+        try emitSystemStateEvent(
+            timestampUs: timestampUs,
+            monotonicNs: monotonicNs,
+            kind: granted ? .accessibilityGranted : .accessibilityDenied,
+            source: .manual  // Permission changes come from user action in System Preferences
         )
     }
     
@@ -150,25 +237,46 @@ extension Agent {
         // Get current frontmost app (sensor is guaranteed to exist after start())
         guard let foregroundAppSensor = foregroundAppSensor,
               let appInfo = foregroundAppSensor.getCurrentFrontmostApp() else { return }
-        
+
         let appId = try eventWriter.ensureApplication(
             bundleId: appInfo.bundleId,
             displayName: appInfo.displayName,
             firstSeenTsUs: timestampUs
         )
-        
+
         currentAppId = appId
         currentPid = appInfo.pid
-        
+
+        // Start observing title changes for this app
+        accessibilitySensor?.startObserving(forPid: appInfo.pid)
+
+        // Get initial title if permission granted
+        var titleId: Int64? = nil
+        var titleStatus = TitleStatus.noWindow
+        var axErrorCode: Int32? = nil
+
+        if hasAccessibilityPermission, let sensor = accessibilitySensor {
+            let result = sensor.readWindowTitle(for: appInfo.pid)
+            titleStatus = TitleStatus(rawValue: result.status.rawValue) ?? .error
+            axErrorCode = result.axErrorCode
+
+            if let title = result.title {
+                titleId = try eventWriter.ensureWindowTitle(title: title, firstSeenTsUs: timestampUs)
+            }
+        } else if !hasAccessibilityPermission {
+            titleStatus = .noPermission
+        }
+
         try eventWriter.insertRawActivityEvent(
             eventTsUs: timestampUs,
             eventMonotonicNs: monotonicNs,
             appId: appId,
             pid: appInfo.pid,
-            titleId: nil as Int64?,
-            titleStatus: TitleStatus.noWindow,
+            titleId: titleId,
+            titleStatus: titleStatus,
             reason: ActivityEventReason.workingBegan,
-            isWorking: true
+            isWorking: true,
+            axErrorCode: axErrorCode
         )
     }
 }

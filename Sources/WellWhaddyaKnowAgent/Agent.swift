@@ -31,10 +31,14 @@ public actor Agent: SensorEventHandler {
     var sessionSensor: SessionStateSensor?
     var sleepWakeSensor: SleepWakeSensor?
     var foregroundAppSensor: ForegroundAppSensor?
+    var accessibilitySensor: AccessibilitySensor?
 
     // Track current foreground app for activity events
     var currentAppId: Int64?
     var currentPid: pid_t = 0
+
+    // Track accessibility permission state
+    var hasAccessibilityPermission: Bool = false
 
     // MARK: - Initialization
 
@@ -68,6 +72,8 @@ public actor Agent: SensorEventHandler {
         self.sessionSensor = SessionStateSensor(handler: self)
         self.sleepWakeSensor = SleepWakeSensor(handler: self)
         self.foregroundAppSensor = ForegroundAppSensor(handler: self)
+        self.accessibilitySensor = AccessibilitySensor(handler: self)
+        self.hasAccessibilityPermission = AccessibilitySensor.checkPermission()
     }
     
     // MARK: - Lifecycle (SPEC.md Section 5.2)
@@ -77,7 +83,8 @@ public actor Agent: SensorEventHandler {
         // Ensure sensors are configured before starting
         guard let sessionSensor = sessionSensor,
               let sleepWakeSensor = sleepWakeSensor,
-              let foregroundAppSensor = foregroundAppSensor else {
+              let foregroundAppSensor = foregroundAppSensor,
+              let _ = accessibilitySensor else {
             throw AgentError.sensorsNotConfigured
         }
 
@@ -132,6 +139,7 @@ public actor Agent: SensorEventHandler {
         sleepWakeSensor?.stopObserving()
         foregroundAppSensor?.stopObserving()
         sessionSensor?.stopPolling()
+        accessibilitySensor?.stopObserving()
 
         // Emit agent_stop event
         try emitSystemStateEvent(
@@ -167,6 +175,22 @@ public actor Agent: SensorEventHandler {
                     bundleId: bundleId,
                     displayName: displayName,
                     pid: pid,
+                    timestamp: timestamp,
+                    monotonicNs: monotonicNs
+                )
+
+            case .titleChanged(let pid, let result, let reason, let timestamp, let monotonicNs):
+                try await handleTitleChanged(
+                    pid: pid,
+                    result: result,
+                    reason: reason,
+                    timestamp: timestamp,
+                    monotonicNs: monotonicNs
+                )
+
+            case .accessibilityPermissionChanged(let granted, let timestamp, let monotonicNs):
+                try await handleAccessibilityPermissionChanged(
+                    granted: granted,
                     timestamp: timestamp,
                     monotonicNs: monotonicNs
                 )

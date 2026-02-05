@@ -88,6 +88,35 @@ public final class EventWriter: @unchecked Sendable {
         return sqlite3_last_insert_rowid(db)
     }
     
+    /// Ensure a window title exists in the window_titles table, return title_id
+    public func ensureWindowTitle(title: String, firstSeenTsUs: Int64) throws -> Int64 {
+        guard let db = connection.rawPointer else {
+            throw DatabaseError.failedToExecute("Database not open")
+        }
+
+        let escapedTitle = escapeSql(title)
+
+        // First try to get existing
+        var statement: OpaquePointer?
+        let selectSql = "SELECT title_id FROM window_titles WHERE title = '\(escapedTitle)';"
+
+        if sqlite3_prepare_v2(db, selectSql, -1, &statement, nil) == SQLITE_OK {
+            defer { sqlite3_finalize(statement) }
+            if sqlite3_step(statement) == SQLITE_ROW {
+                return Int64(sqlite3_column_int64(statement, 0))
+            }
+        }
+
+        // Insert new window title
+        let insertSql = """
+            INSERT INTO window_titles (title, first_seen_ts_us)
+            VALUES ('\(escapedTitle)', \(firstSeenTsUs));
+            """
+        try connection.execute(insertSql)
+
+        return sqlite3_last_insert_rowid(db)
+    }
+
     /// Insert a raw_activity_events row
     public func insertRawActivityEvent(
         eventTsUs: Int64,
