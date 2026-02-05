@@ -32,11 +32,7 @@ struct Summary: AsyncParsableCommand {
     var groupBy: GroupBy = .app
 
     mutating func run() async throws {
-        let dbPath = options.db ?? getDefaultDatabasePath()
-        guard let path = dbPath else {
-            printError("Database path not found")
-            throw ExitCode.databaseError
-        }
+        let path = options.db ?? getDefaultDatabasePath()
 
         let startTsUs = try parseISODate(from)
         let endTsUs = try parseISODate(to)
@@ -94,11 +90,7 @@ struct Today: AsyncParsableCommand {
     @OptionGroup var options: GlobalOptions
 
     mutating func run() async throws {
-        let dbPath = options.db ?? getDefaultDatabasePath()
-        guard let path = dbPath else {
-            printError("Database path not found")
-            throw ExitCode.databaseError
-        }
+        let path = options.db ?? getDefaultDatabasePath()
 
         let calendar = Calendar.current
         let now = Date()
@@ -148,11 +140,7 @@ struct Week: AsyncParsableCommand {
     @OptionGroup var options: GlobalOptions
 
     mutating func run() async throws {
-        let dbPath = options.db ?? getDefaultDatabasePath()
-        guard let path = dbPath else {
-            printError("Database path not found")
-            throw ExitCode.databaseError
-        }
+        let path = options.db ?? getDefaultDatabasePath()
 
         let calendar = Calendar.current
         let now = Date()

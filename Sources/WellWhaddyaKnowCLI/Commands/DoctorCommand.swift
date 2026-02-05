@@ -17,36 +17,30 @@ struct Doctor: AsyncParsableCommand {
         var allPassed = true
 
         // Check 1: Database exists and is readable
-        let dbPath = options.db ?? getDefaultDatabasePath()
+        let path = options.db ?? getDefaultDatabasePath()
         var dbCheck: [String: Any] = ["check": "database"]
-        
-        if let path = dbPath {
-            dbCheck["path"] = path
-            if FileManager.default.fileExists(atPath: path) {
-                do {
-                    let reader = try DatabaseReader(path: path)
-                    let isValid = try reader.verifyIntegrity()
-                    if isValid {
-                        dbCheck["status"] = "ok"
-                        dbCheck["message"] = "Database exists and passes integrity check"
-                    } else {
-                        dbCheck["status"] = "error"
-                        dbCheck["message"] = "Database integrity check failed"
-                        allPassed = false
-                    }
-                } catch {
+
+        dbCheck["path"] = path
+        if FileManager.default.fileExists(atPath: path) {
+            do {
+                let reader = try DatabaseReader(path: path)
+                let isValid = try reader.verifyIntegrity()
+                if isValid {
+                    dbCheck["status"] = "ok"
+                    dbCheck["message"] = "Database exists and passes integrity check"
+                } else {
                     dbCheck["status"] = "error"
-                    dbCheck["message"] = "Cannot open database: \(error.localizedDescription)"
+                    dbCheck["message"] = "Database integrity check failed"
                     allPassed = false
                 }
-            } else {
-                dbCheck["status"] = "warning"
-                dbCheck["message"] = "Database file does not exist (may not be initialized yet)"
+            } catch {
+                dbCheck["status"] = "error"
+                dbCheck["message"] = "Cannot open database: \(error.localizedDescription)"
+                allPassed = false
             }
         } else {
-            dbCheck["status"] = "error"
-            dbCheck["message"] = "App group container not accessible"
-            allPassed = false
+            dbCheck["status"] = "warning"
+            dbCheck["message"] = "Database file does not exist (may not be initialized yet)"
         }
         checks.append(dbCheck)
 

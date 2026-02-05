@@ -37,11 +37,7 @@ struct Export: AsyncParsableCommand {
     var includeTitles: Bool = true
 
     mutating func run() async throws {
-        let dbPath = options.db ?? getDefaultDatabasePath()
-        guard let path = dbPath else {
-            printError("Database path not found")
-            throw ExitCode.databaseError
-        }
+        let path = options.db ?? getDefaultDatabasePath()
 
         let startTsUs = try parseISODate(from)
         let endTsUs = try parseISODate(to)

@@ -39,15 +39,26 @@ struct GlobalOptions: ParsableArguments {
 
 // MARK: - Helpers
 
-/// Get the default database path from app group container
-func getDefaultDatabasePath() -> String? {
+/// Get the default database path from App Group container (per SPEC.md Section 3)
+/// Path: ~/Library/Group Containers/group.com.daylily.wellwhaddyaknow/WellWhaddyaKnow/wwk.sqlite
+func getDefaultDatabasePath() -> String {
     let appGroupId = "group.com.daylily.wellwhaddyaknow"
-    guard let containerURL = FileManager.default.containerURL(
+
+    // Try the App Group container API first (works in sandboxed apps)
+    if let containerURL = FileManager.default.containerURL(
         forSecurityApplicationGroupIdentifier: appGroupId
-    ) else {
-        return nil
+    ) {
+        return containerURL
+            .appendingPathComponent("WellWhaddyaKnow")
+            .appendingPathComponent("wwk.sqlite")
+            .path
     }
-    return containerURL
+
+    // Fallback: construct the path directly for non-sandboxed command-line tools
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    return home
+        .appendingPathComponent("Library/Group Containers")
+        .appendingPathComponent(appGroupId)
         .appendingPathComponent("WellWhaddyaKnow")
         .appendingPathComponent("wwk.sqlite")
         .path

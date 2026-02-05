@@ -26,11 +26,7 @@ struct DBVerify: AsyncParsableCommand {
     @OptionGroup var options: GlobalOptions
 
     mutating func run() async throws {
-        let dbPath = options.db ?? getDefaultDatabasePath()
-        guard let path = dbPath else {
-            printError("Database path not found")
-            throw ExitCode.databaseError
-        }
+        let path = options.db ?? getDefaultDatabasePath()
 
         let reader = try DatabaseReader(path: path)
         let isValid = try reader.verifyIntegrity()
@@ -65,11 +61,7 @@ struct DBInfo: AsyncParsableCommand {
     @OptionGroup var options: GlobalOptions
 
     mutating func run() async throws {
-        let dbPath = options.db ?? getDefaultDatabasePath()
-        guard let path = dbPath else {
-            printError("Database path not found")
-            throw ExitCode.databaseError
-        }
+        let path = options.db ?? getDefaultDatabasePath()
 
         let reader = try DatabaseReader(path: path)
         let schemaVersion = try reader.getSchemaVersion()

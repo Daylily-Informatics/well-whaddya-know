@@ -13,10 +13,27 @@ import AppKit
 @MainActor private var sigtermSource: DispatchSourceSignal?
 @MainActor private var sigintSource: DispatchSourceSignal?
 
-/// Default database path in app support directory
+/// Default database path in App Group container (per SPEC.md Section 3)
+/// Path: ~/Library/Group Containers/group.com.daylily.wellwhaddyaknow/WellWhaddyaKnow/wwk.sqlite
 private func getDefaultDatabasePath() -> String {
-    let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-    let appDir = appSupport.appendingPathComponent("WellWhaddyaKnow", isDirectory: true)
+    let appGroupId = "group.com.daylily.wellwhaddyaknow"
+
+    // Try the App Group container API first (works in sandboxed apps)
+    if let containerURL = FileManager.default.containerURL(
+        forSecurityApplicationGroupIdentifier: appGroupId
+    ) {
+        let appDir = containerURL.appendingPathComponent("WellWhaddyaKnow", isDirectory: true)
+        try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+        return appDir.appendingPathComponent("wwk.sqlite").path
+    }
+
+    // Fallback: construct the path directly for non-sandboxed command-line tools
+    // This matches the path that containerURL would return
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let groupContainers = home.appendingPathComponent("Library/Group Containers", isDirectory: true)
+    let appDir = groupContainers
+        .appendingPathComponent(appGroupId, isDirectory: true)
+        .appendingPathComponent("WellWhaddyaKnow", isDirectory: true)
 
     // Create directory if it doesn't exist
     try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)

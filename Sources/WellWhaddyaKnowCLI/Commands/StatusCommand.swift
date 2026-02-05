@@ -17,18 +17,9 @@ struct Status: AsyncParsableCommand {
         // For now, we can't connect to the agent via XPC from CLI
         // because the agent doesn't have a proper XPC listener yet.
         // Instead, we'll show database-based status.
-        
-        let dbPath = options.db ?? getDefaultDatabasePath()
-        
-        guard let path = dbPath else {
-            if options.json {
-                print(#"{"error": "Database path not found"}"#)
-            } else {
-                printError("Database path not found. Use --db to specify.")
-            }
-            throw ExitCode.databaseError
-        }
-        
+
+        let path = options.db ?? getDefaultDatabasePath()
+
         do {
             let reader = try DatabaseReader(path: path)
             

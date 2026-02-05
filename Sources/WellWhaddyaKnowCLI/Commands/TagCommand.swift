@@ -30,11 +30,7 @@ struct TagList: AsyncParsableCommand {
     @OptionGroup var options: GlobalOptions
 
     mutating func run() async throws {
-        let dbPath = options.db ?? getDefaultDatabasePath()
-        guard let path = dbPath else {
-            printError("Database path not found")
-            throw ExitCode.databaseError
-        }
+        let path = options.db ?? getDefaultDatabasePath()
 
         let reader = try DatabaseReader(path: path)
         let tags = try reader.loadTags()
