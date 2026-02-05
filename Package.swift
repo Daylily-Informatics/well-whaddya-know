@@ -164,6 +164,15 @@ let package = Package(
             ],
             path: "Tests/Integration/XPCTests"
         ),
+
+        // Menu bar UI unit tests
+        .testTarget(
+            name: "MenuBarUITests",
+            dependencies: [
+                .product(name: "Testing", package: "swift-testing"),
+            ],
+            path: "Tests/Unit/MenuBarUITests"
+        ),
     ]
 )
 
