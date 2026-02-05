@@ -181,10 +181,14 @@ final class TodayTotalCalculator {
         end: Int64
     ) throws -> [UserEditEvent] {
         var events: [UserEditEvent] = []
+        // Query matches user_edit_events schema from SPEC.md Section 6.4
         let sql = """
-            SELECT uee_id, created_ts_us, op, start_ts_us, end_ts_us,
-                   app_name, bundle_id, title, tags_json, note,
-                   undo_target_uee_id, is_undone
+            SELECT uee_id, created_ts_us, created_monotonic_ns,
+                   author_username, author_uid, client, client_version,
+                   op, start_ts_us, end_ts_us,
+                   tag_id, tag_name,
+                   manual_app_bundle_id, manual_app_name, manual_window_title,
+                   note, target_uee_id, payload_json
             FROM user_edit_events
             WHERE (start_ts_us < ? AND end_ts_us > ?) OR op = 'undo_edit'
             ORDER BY created_ts_us;
@@ -199,35 +203,29 @@ final class TodayTotalCalculator {
         sqlite3_bind_int64(stmt, 2, start)
 
         while sqlite3_step(stmt) == SQLITE_ROW {
-            let tagsJson = sqlite3_column_type(stmt, 8) != SQLITE_NULL ? String(cString: sqlite3_column_text(stmt, 8)) : nil
-            let tags = parseTagsJson(tagsJson)
-
             let event = UserEditEvent(
                 ueeId: sqlite3_column_int64(stmt, 0),
                 createdTsUs: sqlite3_column_int64(stmt, 1),
-                op: EditOperation(rawValue: String(cString: sqlite3_column_text(stmt, 2))) ?? .deleteRange,
-                startTsUs: sqlite3_column_type(stmt, 3) != SQLITE_NULL ? sqlite3_column_int64(stmt, 3) : nil,
-                endTsUs: sqlite3_column_type(stmt, 4) != SQLITE_NULL ? sqlite3_column_int64(stmt, 4) : nil,
-                appName: sqlite3_column_type(stmt, 5) != SQLITE_NULL ? String(cString: sqlite3_column_text(stmt, 5)) : nil,
-                bundleId: sqlite3_column_type(stmt, 6) != SQLITE_NULL ? String(cString: sqlite3_column_text(stmt, 6)) : nil,
-                title: sqlite3_column_type(stmt, 7) != SQLITE_NULL ? String(cString: sqlite3_column_text(stmt, 7)) : nil,
-                tags: tags,
-                note: sqlite3_column_type(stmt, 9) != SQLITE_NULL ? String(cString: sqlite3_column_text(stmt, 9)) : nil,
-                undoTargetUeeId: sqlite3_column_type(stmt, 10) != SQLITE_NULL ? sqlite3_column_int64(stmt, 10) : nil,
-                isUndone: sqlite3_column_int(stmt, 11) != 0
+                createdMonotonicNs: UInt64(sqlite3_column_int64(stmt, 2)),
+                authorUsername: String(cString: sqlite3_column_text(stmt, 3)),
+                authorUid: Int(sqlite3_column_int(stmt, 4)),
+                client: EditClient(rawValue: String(cString: sqlite3_column_text(stmt, 5))) ?? .ui,
+                clientVersion: String(cString: sqlite3_column_text(stmt, 6)),
+                op: EditOperation(rawValue: String(cString: sqlite3_column_text(stmt, 7))) ?? .deleteRange,
+                startTsUs: sqlite3_column_int64(stmt, 8),
+                endTsUs: sqlite3_column_int64(stmt, 9),
+                tagId: sqlite3_column_type(stmt, 10) != SQLITE_NULL ? sqlite3_column_int64(stmt, 10) : nil,
+                tagName: sqlite3_column_type(stmt, 11) != SQLITE_NULL ? String(cString: sqlite3_column_text(stmt, 11)) : nil,
+                manualAppBundleId: sqlite3_column_type(stmt, 12) != SQLITE_NULL ? String(cString: sqlite3_column_text(stmt, 12)) : nil,
+                manualAppName: sqlite3_column_type(stmt, 13) != SQLITE_NULL ? String(cString: sqlite3_column_text(stmt, 13)) : nil,
+                manualWindowTitle: sqlite3_column_type(stmt, 14) != SQLITE_NULL ? String(cString: sqlite3_column_text(stmt, 14)) : nil,
+                note: sqlite3_column_type(stmt, 15) != SQLITE_NULL ? String(cString: sqlite3_column_text(stmt, 15)) : nil,
+                targetUeeId: sqlite3_column_type(stmt, 16) != SQLITE_NULL ? sqlite3_column_int64(stmt, 16) : nil,
+                payloadJson: sqlite3_column_type(stmt, 17) != SQLITE_NULL ? String(cString: sqlite3_column_text(stmt, 17)) : nil
             )
             events.append(event)
         }
         return events
-    }
-
-    private static func parseTagsJson(_ json: String?) -> [String] {
-        guard let json = json, !json.isEmpty else { return [] }
-        guard let data = json.data(using: .utf8),
-              let tags = try? JSONDecoder().decode([String].self, from: data) else {
-            return []
-        }
-        return tags
     }
 }
 
