@@ -33,18 +33,84 @@ public struct SessionState: Sendable, Equatable {
     }
 }
 
+/// Result of reading a window title via Accessibility API
+public struct TitleReadResult: Sendable, Equatable {
+    public let title: String?
+    public let status: TitleReadStatus
+    public let axErrorCode: Int32?
+
+    public init(title: String?, status: TitleReadStatus, axErrorCode: Int32? = nil) {
+        self.title = title
+        self.status = status
+        self.axErrorCode = axErrorCode
+    }
+
+    /// Successful title read
+    public static func ok(_ title: String) -> TitleReadResult {
+        TitleReadResult(title: title, status: .ok)
+    }
+
+    /// No Accessibility permission
+    public static var noPermission: TitleReadResult {
+        TitleReadResult(title: nil, status: .noPermission)
+    }
+
+    /// App doesn't support Accessibility
+    public static var notSupported: TitleReadResult {
+        TitleReadResult(title: nil, status: .notSupported)
+    }
+
+    /// App has no focused window
+    public static var noWindow: TitleReadResult {
+        TitleReadResult(title: nil, status: .noWindow)
+    }
+
+    /// Error reading title
+    public static func error(code: Int32) -> TitleReadResult {
+        TitleReadResult(title: nil, status: .error, axErrorCode: code)
+    }
+}
+
+/// Status of title read attempt (maps to title_status in raw_activity_events)
+public enum TitleReadStatus: String, Sendable {
+    case ok = "ok"
+    case noPermission = "no_permission"
+    case notSupported = "not_supported"
+    case noWindow = "no_window"
+    case error = "error"
+}
+
+/// Reason for title change event
+public enum TitleChangeReason: String, Sendable {
+    case axTitleChanged = "ax_title_changed"
+    case axFocusedWindowChanged = "ax_focused_window_changed"
+    case pollFallback = "poll_fallback"
+}
+
 /// Events emitted by sensors to the agent
 public enum SensorEvent: Sendable {
     // Session state changes
     case sessionStateChanged(SessionState, source: SensorSource)
-    
+
     // Sleep/wake events
     case willSleep(timestamp: Date, monotonicNs: UInt64)
     case didWake(timestamp: Date, monotonicNs: UInt64)
     case willPowerOff(timestamp: Date, monotonicNs: UInt64)
-    
+
     // Foreground app changes
     case appActivated(bundleId: String, displayName: String, pid: pid_t, timestamp: Date, monotonicNs: UInt64)
+
+    // Window title changes (Accessibility API)
+    case titleChanged(
+        pid: pid_t,
+        result: TitleReadResult,
+        reason: TitleChangeReason,
+        timestamp: Date,
+        monotonicNs: UInt64
+    )
+
+    // Accessibility permission changes
+    case accessibilityPermissionChanged(granted: Bool, timestamp: Date, monotonicNs: UInt64)
 }
 
 /// Protocol for sensor event handlers
