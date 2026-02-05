@@ -15,7 +15,8 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/apple/swift-testing.git", branch: "main"),
+        // Swift Testing from release/6.0 branch, compatible with Swift 6.0
+        .package(url: "https://github.com/apple/swift-testing.git", branch: "release/6.0"),
     ],
     targets: [
         // Shared/Storage module
@@ -24,7 +25,7 @@ let package = Package(
             path: "Sources/Shared/Storage"
         ),
 
-        // Unit tests
+        // Unit tests using Swift Testing
         .testTarget(
             name: "StorageTests",
             dependencies: [
