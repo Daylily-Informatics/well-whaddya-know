@@ -18,8 +18,8 @@ final class XPCClient: Sendable {
     /// - Returns: StatusResponse from the agent
     /// - Throws: XPCError.agentNotRunning if connection fails
     func getStatus() async throws -> StatusResponse {
-        // Create XPC connection to the agent
-        let connection = NSXPCConnection(machineServiceName: serviceName)
+        // Create XPC connection to the agent (Mach service for launchd-managed daemon)
+        let connection = NSXPCConnection(machServiceName: serviceName, options: [])
         connection.remoteObjectInterface = NSXPCInterface(with: NSObjectProtocol.self)
 
         connection.resume()
