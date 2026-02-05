@@ -207,5 +207,5 @@ public final class DatabaseConnection {
 
     /// Returns the underlying SQLite database pointer for advanced operations
     /// Use with caution - prefer using the provided methods
-    internal var rawPointer: OpaquePointer? { db }
+    public var rawPointer: OpaquePointer? { db }
 }

@@ -13,6 +13,14 @@ let package = Package(
             name: "Storage",
             targets: ["Storage"]
         ),
+        .library(
+            name: "Sensors",
+            targets: ["Sensors"]
+        ),
+        .executable(
+            name: "wwkd",
+            targets: ["WellWhaddyaKnowAgent"]
+        ),
     ],
     dependencies: [
         // Swift Testing from release/6.0 branch, compatible with Swift 6.0
@@ -25,14 +33,54 @@ let package = Package(
             path: "Sources/Shared/Storage"
         ),
 
-        // Unit tests using Swift Testing
+        // Shared/Sensors module - macOS sensor wrappers
+        .target(
+            name: "Sensors",
+            dependencies: [],
+            path: "Sources/Shared/Sensors"
+        ),
+
+        // WellWhaddyaKnowAgent - background daemon (wwkd)
+        .executableTarget(
+            name: "WellWhaddyaKnowAgent",
+            dependencies: ["Storage", "Sensors"],
+            path: "Sources/WellWhaddyaKnowAgent",
+            swiftSettings: [
+                .unsafeFlags(["-parse-as-library"])
+            ]
+        ),
+
+        // Storage unit tests
         .testTarget(
             name: "StorageTests",
             dependencies: [
                 "Storage",
                 .product(name: "Testing", package: "swift-testing"),
             ],
-            path: "Tests/Unit"
+            path: "Tests/Unit/StorageTests",
+            sources: ["StorageTests.swift", "ImmutabilityTests.swift", "ForeignKeyTests.swift", "MigrationTests.swift"]
+        ),
+
+        // Sensors unit tests
+        .testTarget(
+            name: "SensorTests",
+            dependencies: [
+                "Sensors",
+                .product(name: "Testing", package: "swift-testing"),
+            ],
+            path: "Tests/Unit/SensorTests"
+        ),
+
+        // Agent unit tests
+        .testTarget(
+            name: "AgentTests",
+            dependencies: [
+                "WellWhaddyaKnowAgent",
+                "Storage",
+                "Sensors",
+                .product(name: "Testing", package: "swift-testing"),
+            ],
+            path: "Tests/Unit/AgentTests"
         ),
     ]
 )
