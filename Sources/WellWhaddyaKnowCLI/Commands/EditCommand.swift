@@ -3,6 +3,7 @@
 
 import ArgumentParser
 import Foundation
+import XPCProtocol
 
 /// Edit command group - timeline editing operations
 struct Edit: AsyncParsableCommand {
@@ -44,10 +45,22 @@ struct EditDelete: AsyncParsableCommand {
             throw ExitCode.invalidInput
         }
 
-        // This command requires the agent to be running
-        printError("Edit delete requires the agent (wwkd) to be running.")
-        printError("This command will be available when XPC client integration is complete.")
-        throw ExitCode.agentNotRunning
+        let client = CLIIPCClient()
+
+        do {
+            let ueeId = try await client.deleteRange(from: startTsUs, to: endTsUs, note: note)
+            if options.json {
+                print("{\"success\": true, \"uee_id\": \(ueeId)}")
+            } else {
+                print("Deleted time range. Edit ID: \(ueeId)")
+            }
+        } catch CLIError.agentNotRunning {
+            printError("Agent (wwkd) is not running. Start the agent first.")
+            throw ExitCode.agentNotRunning
+        } catch {
+            printError(error.localizedDescription)
+            throw ExitCode.databaseError
+        }
     }
 }
 
@@ -91,9 +104,38 @@ struct EditAdd: AsyncParsableCommand {
             throw ExitCode.invalidInput
         }
 
-        printError("Edit add requires the agent (wwkd) to be running.")
-        printError("This command will be available when XPC client integration is complete.")
-        throw ExitCode.agentNotRunning
+        // Parse comma-separated tags
+        let tagList: [String]
+        if let tagsStr = tags {
+            tagList = tagsStr.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        } else {
+            tagList = []
+        }
+
+        let client = CLIIPCClient()
+
+        do {
+            let ueeId = try await client.addRange(
+                from: startTsUs,
+                to: endTsUs,
+                appName: appName,
+                bundleId: bundleId,
+                title: title,
+                tags: tagList,
+                note: note
+            )
+            if options.json {
+                print("{\"success\": true, \"uee_id\": \(ueeId)}")
+            } else {
+                print("Added manual activity. Edit ID: \(ueeId)")
+            }
+        } catch CLIError.agentNotRunning {
+            printError("Agent (wwkd) is not running. Start the agent first.")
+            throw ExitCode.agentNotRunning
+        } catch {
+            printError(error.localizedDescription)
+            throw ExitCode.databaseError
+        }
     }
 }
 
@@ -110,9 +152,22 @@ struct EditUndo: AsyncParsableCommand {
     var id: Int64
 
     mutating func run() async throws {
-        printError("Edit undo requires the agent (wwkd) to be running.")
-        printError("This command will be available when XPC client integration is complete.")
-        throw ExitCode.agentNotRunning
+        let client = CLIIPCClient()
+
+        do {
+            let ueeId = try await client.undoEdit(targetUeeId: id)
+            if options.json {
+                print("{\"success\": true, \"uee_id\": \(ueeId)}")
+            } else {
+                print("Undid edit \(id). New edit ID: \(ueeId)")
+            }
+        } catch CLIError.agentNotRunning {
+            printError("Agent (wwkd) is not running. Start the agent first.")
+            throw ExitCode.agentNotRunning
+        } catch {
+            printError(error.localizedDescription)
+            throw ExitCode.databaseError
+        }
     }
 }
 

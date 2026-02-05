@@ -3,6 +3,7 @@
 
 import ArgumentParser
 import Foundation
+import XPCProtocol
 
 /// Tag command group
 struct Tag: AsyncParsableCommand {
@@ -85,10 +86,33 @@ struct TagApply: AsyncParsableCommand {
     var tag: String
 
     mutating func run() async throws {
-        // This command requires the agent to be running
-        printError("Tag apply requires the agent (wwkd) to be running.")
-        printError("This command will be available when XPC client integration is complete.")
-        throw ExitCode.agentNotRunning
+        let startTsUs = try parseISODate(from)
+        let endTsUs = try parseISODate(to)
+
+        guard startTsUs < endTsUs else {
+            printError("Start date must be before end date")
+            throw ExitCode.invalidInput
+        }
+
+        let client = CLIIPCClient()
+
+        do {
+            let ueeId = try await client.applyTag(from: startTsUs, to: endTsUs, tagName: tag)
+            if options.json {
+                print("{\"success\": true, \"uee_id\": \(ueeId)}")
+            } else {
+                print("Applied tag '\(tag)'. Edit ID: \(ueeId)")
+            }
+        } catch CLIError.agentNotRunning {
+            printError("Agent (wwkd) is not running. Start the agent first.")
+            throw ExitCode.agentNotRunning
+        } catch CLIError.tagNotFound(let name) {
+            printError("Tag not found: \(name)")
+            throw ExitCode.invalidInput
+        } catch {
+            printError(error.localizedDescription)
+            throw ExitCode.databaseError
+        }
     }
 }
 
@@ -111,8 +135,33 @@ struct TagRemove: AsyncParsableCommand {
     var tag: String
 
     mutating func run() async throws {
-        printError("Tag remove requires the agent (wwkd) to be running.")
-        throw ExitCode.agentNotRunning
+        let startTsUs = try parseISODate(from)
+        let endTsUs = try parseISODate(to)
+
+        guard startTsUs < endTsUs else {
+            printError("Start date must be before end date")
+            throw ExitCode.invalidInput
+        }
+
+        let client = CLIIPCClient()
+
+        do {
+            let ueeId = try await client.removeTag(from: startTsUs, to: endTsUs, tagName: tag)
+            if options.json {
+                print("{\"success\": true, \"uee_id\": \(ueeId)}")
+            } else {
+                print("Removed tag '\(tag)'. Edit ID: \(ueeId)")
+            }
+        } catch CLIError.agentNotRunning {
+            printError("Agent (wwkd) is not running. Start the agent first.")
+            throw ExitCode.agentNotRunning
+        } catch CLIError.tagNotFound(let name) {
+            printError("Tag not found: \(name)")
+            throw ExitCode.invalidInput
+        } catch {
+            printError(error.localizedDescription)
+            throw ExitCode.databaseError
+        }
     }
 }
 
@@ -129,8 +178,25 @@ struct TagCreate: AsyncParsableCommand {
     var name: String
 
     mutating func run() async throws {
-        printError("Tag create requires the agent (wwkd) to be running.")
-        throw ExitCode.agentNotRunning
+        let client = CLIIPCClient()
+
+        do {
+            let tagId = try await client.createTag(name: name)
+            if options.json {
+                print("{\"success\": true, \"tag_id\": \(tagId)}")
+            } else {
+                print("Created tag '\(name)'. Tag ID: \(tagId)")
+            }
+        } catch CLIError.agentNotRunning {
+            printError("Agent (wwkd) is not running. Start the agent first.")
+            throw ExitCode.agentNotRunning
+        } catch CLIError.tagAlreadyExists(let existingName) {
+            printError("Tag already exists: \(existingName)")
+            throw ExitCode.invalidInput
+        } catch {
+            printError(error.localizedDescription)
+            throw ExitCode.databaseError
+        }
     }
 }
 
@@ -147,8 +213,25 @@ struct TagRetire: AsyncParsableCommand {
     var name: String
 
     mutating func run() async throws {
-        printError("Tag retire requires the agent (wwkd) to be running.")
-        throw ExitCode.agentNotRunning
+        let client = CLIIPCClient()
+
+        do {
+            try await client.retireTag(name: name)
+            if options.json {
+                print("{\"success\": true}")
+            } else {
+                print("Retired tag '\(name)'")
+            }
+        } catch CLIError.agentNotRunning {
+            printError("Agent (wwkd) is not running. Start the agent first.")
+            throw ExitCode.agentNotRunning
+        } catch CLIError.tagNotFound(let missingName) {
+            printError("Tag not found: \(missingName)")
+            throw ExitCode.invalidInput
+        } catch {
+            printError(error.localizedDescription)
+            throw ExitCode.databaseError
+        }
     }
 }
 
@@ -168,8 +251,32 @@ struct TagRename: AsyncParsableCommand {
     var toName: String
 
     mutating func run() async throws {
-        printError("Tag rename requires the agent (wwkd) to be running.")
-        throw ExitCode.agentNotRunning
+        let client = CLIIPCClient()
+
+        do {
+            // Create the new tag first
+            let tagId = try await client.createTag(name: toName)
+            // Then retire the old tag
+            try await client.retireTag(name: fromName)
+
+            if options.json {
+                print("{\"success\": true, \"new_tag_id\": \(tagId)}")
+            } else {
+                print("Renamed tag '\(fromName)' to '\(toName)'. New tag ID: \(tagId)")
+            }
+        } catch CLIError.agentNotRunning {
+            printError("Agent (wwkd) is not running. Start the agent first.")
+            throw ExitCode.agentNotRunning
+        } catch CLIError.tagNotFound(let missingName) {
+            printError("Tag not found: \(missingName)")
+            throw ExitCode.invalidInput
+        } catch CLIError.tagAlreadyExists(let existingName) {
+            printError("Tag already exists: \(existingName)")
+            throw ExitCode.invalidInput
+        } catch {
+            printError(error.localizedDescription)
+            throw ExitCode.databaseError
+        }
     }
 }
 
