@@ -174,6 +174,23 @@ public actor Agent: SensorEventHandler {
                     timestamp: timestamp,
                     monotonicNs: monotonicNs
                 )
+
+            case .titleChanged(let pid, let title, let status, let source, let timestamp, let monotonicNs):
+                try await handleTitleChanged(
+                    pid: pid,
+                    title: title,
+                    status: status,
+                    source: source,
+                    timestamp: timestamp,
+                    monotonicNs: monotonicNs
+                )
+
+            case .accessibilityPermissionChanged(let granted, let timestamp, let monotonicNs):
+                try await handleAccessibilityPermissionChanged(
+                    granted: granted,
+                    timestamp: timestamp,
+                    monotonicNs: monotonicNs
+                )
             }
         } catch {
             // Log error but don't crash the agent

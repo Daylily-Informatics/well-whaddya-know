@@ -165,16 +165,16 @@ extension Agent {
         // Get current frontmost app (sensor is guaranteed to exist after start())
         guard let foregroundAppSensor = foregroundAppSensor,
               let appInfo = foregroundAppSensor.getCurrentFrontmostApp() else { return }
-        
+
         let appId = try eventWriter.ensureApplication(
             bundleId: appInfo.bundleId,
             displayName: appInfo.displayName,
             firstSeenTsUs: timestampUs
         )
-        
+
         currentAppId = appId
         currentPid = appInfo.pid
-        
+
         try eventWriter.insertRawActivityEvent(
             eventTsUs: timestampUs,
             eventMonotonicNs: monotonicNs,
@@ -184,6 +184,84 @@ extension Agent {
             titleStatus: TitleStatus.noWindow,
             reason: ActivityEventReason.workingBegan,
             isWorking: true
+        )
+    }
+
+    // MARK: - Title Change (SPEC.md Section 3.4)
+
+    func handleTitleChanged(
+        pid: pid_t,
+        title: String?,
+        status: TitleCaptureStatus,
+        source: SensorSource,
+        timestamp: Date,
+        monotonicNs: UInt64
+    ) async throws {
+        // Only emit activity events when working (SPEC.md 5.4)
+        guard state.isWorking else { return }
+
+        let timestampUs = Int64(timestamp.timeIntervalSince1970 * 1_000_000)
+
+        // Need current app info
+        guard let appId = currentAppId else { return }
+
+        // Map TitleCaptureStatus to TitleStatus for storage
+        let titleStatus: TitleStatus
+        switch status {
+        case .ok:
+            titleStatus = .ok
+        case .noPermission:
+            titleStatus = .noPermission
+        case .notSupported:
+            titleStatus = .notSupported
+        case .noWindow:
+            titleStatus = .noWindow
+        case .error:
+            titleStatus = .error
+        }
+
+        // Get or create title ID if we have a title
+        var titleId: Int64?
+        if let title = title {
+            titleId = try eventWriter.ensureWindowTitle(title: title, firstSeenTsUs: timestampUs)
+        }
+
+        // Determine reason based on source
+        let reason: ActivityEventReason
+        switch source {
+        case .timerPoll:
+            reason = .pollFallback
+        default:
+            reason = .axTitleChanged
+        }
+
+        try eventWriter.insertRawActivityEvent(
+            eventTsUs: timestampUs,
+            eventMonotonicNs: monotonicNs,
+            appId: appId,
+            pid: pid,
+            titleId: titleId,
+            titleStatus: titleStatus,
+            reason: reason,
+            isWorking: true
+        )
+    }
+
+    // MARK: - Accessibility Permission Change (SPEC.md Section 5.5.G)
+
+    func handleAccessibilityPermissionChanged(
+        granted: Bool,
+        timestamp: Date,
+        monotonicNs: UInt64
+    ) async throws {
+        let timestampUs = Int64(timestamp.timeIntervalSince1970 * 1_000_000)
+        let kind: SystemStateEventKind = granted ? .accessibilityGranted : .accessibilityDenied
+
+        try emitSystemStateEvent(
+            timestampUs: timestampUs,
+            monotonicNs: monotonicNs,
+            kind: kind,
+            source: .manual
         )
     }
 }

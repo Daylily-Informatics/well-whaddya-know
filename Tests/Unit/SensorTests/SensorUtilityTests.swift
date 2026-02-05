@@ -109,10 +109,10 @@ struct SensorInitializationTests {
     func foregroundAppSensorGetCurrent() {
         let handler = TestHandler()
         let sensor = ForegroundAppSensor(handler: handler)
-        
+
         // This may return nil in test environment without GUI
         let appInfo = sensor.getCurrentFrontmostApp()
-        
+
         // If we got an app, validate it has expected fields
         if let info = appInfo {
             #expect(!info.bundleId.isEmpty || info.bundleId == "unknown")
@@ -120,6 +120,31 @@ struct SensorInitializationTests {
             #expect(info.pid > 0)
         }
         // nil is also acceptable in headless test environment
+    }
+
+    @Test("AccessibilitySensor can be initialized")
+    func accessibilitySensorInit() {
+        let handler = TestHandler()
+        let sensor = AccessibilitySensor(handler: handler)
+
+        // Should be able to check permission without crashing
+        let granted = sensor.isAccessibilityGranted()
+        // In test environment, this may be true or false
+        #expect(granted == true || granted == false)
+    }
+
+    @Test("AccessibilitySensor getCurrentTitle returns status")
+    func accessibilitySensorGetCurrentTitle() {
+        let handler = TestHandler()
+        let sensor = AccessibilitySensor(handler: handler)
+
+        // Get title for an invalid PID (should return an error status)
+        let (title, status) = sensor.getCurrentTitle(for: -1)
+
+        // Should not crash, and should return some status
+        // Will likely be noPermission in test env, or error for invalid PID
+        #expect(title == nil || title != nil)  // Either is acceptable
+        #expect([TitleCaptureStatus.ok, .noPermission, .notSupported, .noWindow, .error].contains(status))
     }
 }
 

@@ -148,7 +148,7 @@ struct SensorEventTests {
             timestamp: timestamp,
             monotonicNs: 5678
         )
-        
+
         if case let .appActivated(bundleId, displayName, pid, ts, mono) = event {
             #expect(bundleId == "com.test.app")
             #expect(displayName == "Test App")
@@ -158,6 +158,63 @@ struct SensorEventTests {
         } else {
             Issue.record("Event should be appActivated")
         }
+    }
+
+    @Test("SensorEvent titleChanged carries title info")
+    func titleChangedEvent() {
+        let timestamp = Date()
+        let event = SensorEvent.titleChanged(
+            pid: 1234,
+            title: "My Window",
+            status: .ok,
+            source: .workspaceNotification,
+            timestamp: timestamp,
+            monotonicNs: 9999
+        )
+
+        if case let .titleChanged(pid, title, status, source, ts, mono) = event {
+            #expect(pid == 1234)
+            #expect(title == "My Window")
+            #expect(status == .ok)
+            #expect(source == .workspaceNotification)
+            #expect(ts == timestamp)
+            #expect(mono == 9999)
+        } else {
+            Issue.record("Event should be titleChanged")
+        }
+    }
+
+    @Test("SensorEvent accessibilityPermissionChanged carries granted state")
+    func accessibilityPermissionChangedEvent() {
+        let timestamp = Date()
+        let event = SensorEvent.accessibilityPermissionChanged(
+            granted: true,
+            timestamp: timestamp,
+            monotonicNs: 1111
+        )
+
+        if case let .accessibilityPermissionChanged(granted, ts, mono) = event {
+            #expect(granted == true)
+            #expect(ts == timestamp)
+            #expect(mono == 1111)
+        } else {
+            Issue.record("Event should be accessibilityPermissionChanged")
+        }
+    }
+}
+
+// MARK: - TitleCaptureStatus Tests
+
+@Suite("TitleCaptureStatus Tests")
+struct TitleCaptureStatusTests {
+
+    @Test("TitleCaptureStatus has expected raw values")
+    func titleCaptureStatusRawValues() {
+        #expect(TitleCaptureStatus.ok.rawValue == "ok")
+        #expect(TitleCaptureStatus.noPermission.rawValue == "no_permission")
+        #expect(TitleCaptureStatus.notSupported.rawValue == "not_supported")
+        #expect(TitleCaptureStatus.noWindow.rawValue == "no_window")
+        #expect(TitleCaptureStatus.error.rawValue == "error")
     }
 }
 

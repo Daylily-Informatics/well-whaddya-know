@@ -33,18 +33,40 @@ public struct SessionState: Sendable, Equatable {
     }
 }
 
+/// Title status for Accessibility API results per SPEC.md Section 6.4
+public enum TitleCaptureStatus: String, Sendable {
+    case ok = "ok"
+    case noPermission = "no_permission"
+    case notSupported = "not_supported"
+    case noWindow = "no_window"
+    case error = "error"
+}
+
 /// Events emitted by sensors to the agent
 public enum SensorEvent: Sendable {
     // Session state changes
     case sessionStateChanged(SessionState, source: SensorSource)
-    
+
     // Sleep/wake events
     case willSleep(timestamp: Date, monotonicNs: UInt64)
     case didWake(timestamp: Date, monotonicNs: UInt64)
     case willPowerOff(timestamp: Date, monotonicNs: UInt64)
-    
+
     // Foreground app changes
     case appActivated(bundleId: String, displayName: String, pid: pid_t, timestamp: Date, monotonicNs: UInt64)
+
+    // Window title changes (from AccessibilitySensor)
+    case titleChanged(
+        pid: pid_t,
+        title: String?,
+        status: TitleCaptureStatus,
+        source: SensorSource,
+        timestamp: Date,
+        monotonicNs: UInt64
+    )
+
+    // Accessibility permission changes
+    case accessibilityPermissionChanged(granted: Bool, timestamp: Date, monotonicNs: UInt64)
 }
 
 /// Protocol for sensor event handlers
