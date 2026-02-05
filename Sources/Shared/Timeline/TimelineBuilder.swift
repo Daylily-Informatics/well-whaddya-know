@@ -208,36 +208,76 @@ func computeBaseSegments(
 
 /// Filter out edits that have been undone per SPEC.md Section 7.3
 /// An edit is inactive if targeted by an undo_edit that is itself not undone
+/// Uses recursive resolution with memoization to handle nested undo chains:
+/// e.g., "undo A (targets E) → undo B (targets A) → undo C (targets B)"
+/// C is active → B is undone → A is active (B's effect nullified) → E is undone
 func filterActiveEdits(_ edits: [UserEditEvent]) -> [UserEditEvent] {
-    // Build set of undone edit IDs
-    // An undo is active if it's not itself undone
-    var undoneIds = Set<Int64>()
-
-    // First pass: find all undo_edit operations and their targets
-    // If multiple undos target the same edit, most recent wins
-    let undoEdits = edits.filter { $0.op == .undoEdit }
-        .sorted { $0.createdTsUs > $1.createdTsUs }  // Most recent first
-
-    // Track which undos are themselves undone
-    var undoIsUndone = Set<Int64>()
-
-    for undo in undoEdits {
-        if let targetId = undo.targetUeeId {
-            // Check if this undo targets another undo
-            if undoEdits.contains(where: { $0.ueeId == targetId }) {
-                undoIsUndone.insert(targetId)
-            }
+    // Build map: targetId -> [undos that target it], sorted by createdTsUs descending
+    // So the first undo in each list is the most recent one targeting that edit
+    var undosTargeting: [Int64: [UserEditEvent]] = [:]
+    for edit in edits where edit.op == .undoEdit {
+        if let targetId = edit.targetUeeId {
+            undosTargeting[targetId, default: []].append(edit)
         }
     }
+    // Sort each list by createdTsUs descending (most recent first)
+    for (key, value) in undosTargeting {
+        undosTargeting[key] = value.sorted { $0.createdTsUs > $1.createdTsUs }
+    }
 
-    // Now determine which edits are undone
-    for undo in undoEdits {
-        // Skip if this undo is itself undone
-        if undoIsUndone.contains(undo.ueeId) {
-            continue
+    // Memoization cache for isEditUndone results
+    // true = edit is undone, false = edit is active
+    var cache: [Int64: Bool] = [:]
+
+    /// Recursively determine if an edit is undone.
+    /// An edit is undone if there exists an ACTIVE undo targeting it.
+    /// An undo is active if it's not itself undone (recursive).
+    /// Per SPEC.md Section 7.3: most recent undo wins if multiple target same edit.
+    func isEditUndone(_ editId: Int64, visiting: inout Set<Int64>) -> Bool {
+        // Check cache first
+        if let cached = cache[editId] {
+            return cached
         }
-        if let targetId = undo.targetUeeId {
-            undoneIds.insert(targetId)
+
+        // Cycle detection: if we're already visiting this edit, treat as not undone
+        // This prevents infinite loops in malformed data
+        if visiting.contains(editId) {
+            return false
+        }
+        visiting.insert(editId)
+        defer { visiting.remove(editId) }
+
+        // Find undos that target this edit
+        guard let undos = undosTargeting[editId], !undos.isEmpty else {
+            // No undo targets this edit, so it's active (not undone)
+            cache[editId] = false
+            return false
+        }
+
+        // Check each undo targeting this edit, starting with most recent
+        // The first ACTIVE undo we find determines the result
+        for undo in undos {
+            // Is this undo itself undone?
+            let undoIsUndone = isEditUndone(undo.ueeId, visiting: &visiting)
+            if !undoIsUndone {
+                // This undo is active, so it undoes the target edit
+                cache[editId] = true
+                return true
+            }
+            // This undo is inactive, check next most recent
+        }
+
+        // All undos targeting this edit are themselves undone, so edit is active
+        cache[editId] = false
+        return false
+    }
+
+    // Determine which edits are undone
+    var undoneIds = Set<Int64>()
+    var visiting = Set<Int64>()
+    for edit in edits {
+        if isEditUndone(edit.ueeId, visiting: &visiting) {
+            undoneIds.insert(edit.ueeId)
         }
     }
 
@@ -336,6 +376,7 @@ func applyAddRange(
 
 /// Apply tag_range or untag_range edit - add/remove tags from overlapping segments
 /// Per SPEC.md Section 7.4: Tags are additive overlays, no duration changes
+/// Splits segments at tag boundaries so tags only affect the overlapping portion
 func applyTagEdit(_ edit: UserEditEvent, to segments: [WorkingSegment]) -> [WorkingSegment] {
     guard let tagName = edit.tagName else {
         return segments
@@ -346,23 +387,61 @@ func applyTagEdit(_ edit: UserEditEvent, to segments: [WorkingSegment]) -> [Work
     var result: [WorkingSegment] = []
 
     for segment in segments {
-        var modifiedSegment = segment
+        if !segment.interval.overlaps(with: editInterval) {
+            // No overlap - keep segment unchanged
+            result.append(segment)
+            continue
+        }
 
-        if segment.interval.overlaps(with: editInterval) {
-            // This segment overlaps with the tag edit
-            // For simplicity, we apply the tag to the entire segment if any part overlaps
-            // A more precise implementation would split segments at tag boundaries
-            switch edit.op {
-            case .tagRange:
-                modifiedSegment.tags.insert(tagName)
-            case .untagRange:
-                modifiedSegment.tags.remove(tagName)
-            default:
-                break
+        // Segment overlaps with the tag edit - split at tag boundaries
+        // A segment [segStart, segEnd) and tag [tagStart, tagEnd) can produce up to 3 pieces:
+        // 1. [segStart, tagStart) - before overlap, unchanged
+        // 2. [max(segStart, tagStart), min(segEnd, tagEnd)) - overlap, modified
+        // 3. [tagEnd, segEnd) - after overlap, unchanged
+
+        let segStart = segment.interval.startUs
+        let segEnd = segment.interval.endUs
+        let tagStart = editInterval.startUs
+        let tagEnd = editInterval.endUs
+
+        // Piece 1: Before overlap [segStart, tagStart)
+        if segStart < tagStart {
+            let beforeInterval = TimeInterval(startUs: segStart, endUs: tagStart)
+            if !beforeInterval.isEmpty {
+                var beforeSegment = segment
+                beforeSegment.interval = beforeInterval
+                result.append(beforeSegment)
             }
         }
 
-        result.append(modifiedSegment)
+        // Piece 2: Overlap [max(segStart, tagStart), min(segEnd, tagEnd))
+        let overlapStart = max(segStart, tagStart)
+        let overlapEnd = min(segEnd, tagEnd)
+        if overlapStart < overlapEnd {
+            let overlapInterval = TimeInterval(startUs: overlapStart, endUs: overlapEnd)
+            var overlapSegment = segment
+            overlapSegment.interval = overlapInterval
+            // Apply the tag modification only to the overlap portion
+            switch edit.op {
+            case .tagRange:
+                overlapSegment.tags.insert(tagName)
+            case .untagRange:
+                overlapSegment.tags.remove(tagName)
+            default:
+                break
+            }
+            result.append(overlapSegment)
+        }
+
+        // Piece 3: After overlap [tagEnd, segEnd)
+        if tagEnd < segEnd {
+            let afterInterval = TimeInterval(startUs: tagEnd, endUs: segEnd)
+            if !afterInterval.isEmpty {
+                var afterSegment = segment
+                afterSegment.interval = afterInterval
+                result.append(afterSegment)
+            }
+        }
     }
 
     return result

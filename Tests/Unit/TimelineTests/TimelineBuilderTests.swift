@@ -341,7 +341,7 @@ struct TimelineBuilderTests {
 
     // MARK: - Tag Tests
 
-    @Test("Tag range adds tags to overlapping segments")
+    @Test("Tag range adds tags to overlapping segments with proper splitting")
     func testTagRange() {
         let sse = [
             makeSSE(id: 1, tsUs: 0, isWorking: true),
@@ -352,6 +352,9 @@ struct TimelineBuilderTests {
             makeRAE(id: 2, tsUs: 500_000, bundleId: "com.app.two")
         ]
         // Tag from 200ms to 700ms (overlaps both segments)
+        // Base segments: [0-500 app.one], [500-1000 app.two]
+        // After tag splitting:
+        // [0-200 app.one no-tag], [200-500 app.one tag], [500-700 app.two tag], [700-1000 app.two no-tag]
         let uee = [
             makeUEE(id: 1, createdTsUs: 1, op: .tagRange, startTsUs: 200_000, endTsUs: 700_000, tagName: "meeting")
         ]
@@ -363,10 +366,27 @@ struct TimelineBuilderTests {
             requestedRange: (startUs: 0, endUs: 1_000_000)
         )
 
-        #expect(result.count == 2)
-        // Both segments should have the tag
-        #expect(result[0].tags.contains("meeting"))
+        #expect(result.count == 4)
+        // Segment 1: 0-200ms app.one, no tag
+        #expect(result[0].startTsUs == 0)
+        #expect(result[0].endTsUs == 200_000)
+        #expect(result[0].appBundleId == "com.app.one")
+        #expect(result[0].tags.isEmpty)
+        // Segment 2: 200-500ms app.one, with tag
+        #expect(result[1].startTsUs == 200_000)
+        #expect(result[1].endTsUs == 500_000)
+        #expect(result[1].appBundleId == "com.app.one")
         #expect(result[1].tags.contains("meeting"))
+        // Segment 3: 500-700ms app.two, with tag
+        #expect(result[2].startTsUs == 500_000)
+        #expect(result[2].endTsUs == 700_000)
+        #expect(result[2].appBundleId == "com.app.two")
+        #expect(result[2].tags.contains("meeting"))
+        // Segment 4: 700-1000ms app.two, no tag
+        #expect(result[3].startTsUs == 700_000)
+        #expect(result[3].endTsUs == 1_000_000)
+        #expect(result[3].appBundleId == "com.app.two")
+        #expect(result[3].tags.isEmpty)
     }
 
     @Test("Untag range removes tags")
@@ -414,6 +434,252 @@ struct TimelineBuilderTests {
         #expect(result.count == 1)
         #expect(result[0].startTsUs == 200_000)
         #expect(result[0].endTsUs == 600_000)
+    }
+
+    // MARK: - Nested Undo Chain Tests
+
+    @Test("Nested undo chains resolve correctly per SPEC.md Section 7.3")
+    func testNestedUndoChains() {
+        // Scenario:
+        // - Edit E (id=1): delete_range 400-600ms
+        // - Undo A (id=2): targets E → E becomes inactive
+        // - Undo B (id=3): targets A → A becomes inactive → E becomes active again
+        // - Undo C (id=4): targets B → B becomes inactive → A becomes active → E becomes inactive
+        // Expected: E should be undone (inactive) because A is ultimately active
+
+        let sse = [
+            makeSSE(id: 1, tsUs: 0, isWorking: true),
+            makeSSE(id: 2, tsUs: 1_000_000, isWorking: false)
+        ]
+        let rae = [makeRAE(id: 1, tsUs: 0)]
+        let uee = [
+            // Edit E: delete 400-600ms
+            makeUEE(id: 1, createdTsUs: 100, op: .deleteRange, startTsUs: 400_000, endTsUs: 600_000),
+            // Undo A: targets E
+            makeUEE(id: 2, createdTsUs: 200, op: .undoEdit, startTsUs: 0, endTsUs: 0, targetUeeId: 1),
+            // Undo B: targets A
+            makeUEE(id: 3, createdTsUs: 300, op: .undoEdit, startTsUs: 0, endTsUs: 0, targetUeeId: 2),
+            // Undo C: targets B
+            makeUEE(id: 4, createdTsUs: 400, op: .undoEdit, startTsUs: 0, endTsUs: 0, targetUeeId: 3)
+        ]
+
+        let result = buildEffectiveTimeline(
+            systemStateEvents: sse,
+            rawActivityEvents: rae,
+            userEditEvents: uee,
+            requestedRange: (startUs: 0, endUs: 1_000_000)
+        )
+
+        // C undoes B → B is inactive
+        // B's effect (undoing A) is nullified → A is active
+        // A's effect (undoing E) is active → E is undone
+        // Since E (delete 400-600) is undone, the segment should NOT have a gap
+        // Result: single segment 0-1000ms
+        #expect(result.count == 1)
+        #expect(result[0].startTsUs == 0)
+        #expect(result[0].endTsUs == 1_000_000)
+    }
+
+    @Test("Double undo reactivates deleted segment")
+    func testDoubleUndoReactivatesDelete() {
+        // Scenario:
+        // - Edit E (id=1): delete_range 400-600ms
+        // - Undo A (id=2): targets E → E becomes inactive (delete is undone)
+        // Expected: The delete is undone, so full segment 0-1000ms exists
+
+        let sse = [
+            makeSSE(id: 1, tsUs: 0, isWorking: true),
+            makeSSE(id: 2, tsUs: 1_000_000, isWorking: false)
+        ]
+        let rae = [makeRAE(id: 1, tsUs: 0)]
+        let uee = [
+            makeUEE(id: 1, createdTsUs: 100, op: .deleteRange, startTsUs: 400_000, endTsUs: 600_000),
+            makeUEE(id: 2, createdTsUs: 200, op: .undoEdit, startTsUs: 0, endTsUs: 0, targetUeeId: 1)
+        ]
+
+        let result = buildEffectiveTimeline(
+            systemStateEvents: sse,
+            rawActivityEvents: rae,
+            userEditEvents: uee,
+            requestedRange: (startUs: 0, endUs: 1_000_000)
+        )
+
+        // Delete is undone, so single continuous segment
+        #expect(result.count == 1)
+        #expect(result[0].startTsUs == 0)
+        #expect(result[0].endTsUs == 1_000_000)
+    }
+
+    @Test("Undo of undo restores original delete effect")
+    func testUndoOfUndoRestoresDelete() {
+        // Scenario:
+        // - Edit E (id=1): delete_range 400-600ms
+        // - Undo A (id=2): targets E → E becomes inactive
+        // - Undo B (id=3): targets A → A becomes inactive → E becomes active again
+        // Expected: The delete is active again, so gap exists at 400-600ms
+
+        let sse = [
+            makeSSE(id: 1, tsUs: 0, isWorking: true),
+            makeSSE(id: 2, tsUs: 1_000_000, isWorking: false)
+        ]
+        let rae = [makeRAE(id: 1, tsUs: 0)]
+        let uee = [
+            makeUEE(id: 1, createdTsUs: 100, op: .deleteRange, startTsUs: 400_000, endTsUs: 600_000),
+            makeUEE(id: 2, createdTsUs: 200, op: .undoEdit, startTsUs: 0, endTsUs: 0, targetUeeId: 1),
+            makeUEE(id: 3, createdTsUs: 300, op: .undoEdit, startTsUs: 0, endTsUs: 0, targetUeeId: 2)
+        ]
+
+        let result = buildEffectiveTimeline(
+            systemStateEvents: sse,
+            rawActivityEvents: rae,
+            userEditEvents: uee,
+            requestedRange: (startUs: 0, endUs: 1_000_000)
+        )
+
+        // Undo B undoes Undo A, so A is inactive, so E (delete) is active
+        // Result: two segments with gap at 400-600ms
+        #expect(result.count == 2)
+        #expect(result[0].startTsUs == 0)
+        #expect(result[0].endTsUs == 400_000)
+        #expect(result[1].startTsUs == 600_000)
+        #expect(result[1].endTsUs == 1_000_000)
+    }
+
+    // MARK: - Partial Tag Overlap Tests
+
+    @Test("Tag range only affects overlapping portion of segment")
+    func testPartialTagOverlap() {
+        // Scenario:
+        // - Segment covers 0-1000ms
+        // - Tag edit covers 200-300ms with tag "meeting"
+        // Expected: 3 segments [0-200 no tag, 200-300 with tag, 300-1000 no tag]
+
+        let sse = [
+            makeSSE(id: 1, tsUs: 0, isWorking: true),
+            makeSSE(id: 2, tsUs: 1_000_000, isWorking: false)
+        ]
+        let rae = [makeRAE(id: 1, tsUs: 0)]
+        let uee = [
+            makeUEE(id: 1, createdTsUs: 1, op: .tagRange, startTsUs: 200_000, endTsUs: 300_000, tagName: "meeting")
+        ]
+
+        let result = buildEffectiveTimeline(
+            systemStateEvents: sse,
+            rawActivityEvents: rae,
+            userEditEvents: uee,
+            requestedRange: (startUs: 0, endUs: 1_000_000)
+        )
+
+        #expect(result.count == 3)
+        // First segment: 0-200ms, no tags
+        #expect(result[0].startTsUs == 0)
+        #expect(result[0].endTsUs == 200_000)
+        #expect(result[0].tags.isEmpty)
+        // Second segment: 200-300ms, has "meeting" tag
+        #expect(result[1].startTsUs == 200_000)
+        #expect(result[1].endTsUs == 300_000)
+        #expect(result[1].tags.contains("meeting"))
+        // Third segment: 300-1000ms, no tags
+        #expect(result[2].startTsUs == 300_000)
+        #expect(result[2].endTsUs == 1_000_000)
+        #expect(result[2].tags.isEmpty)
+    }
+
+    @Test("Tag at segment start creates two segments")
+    func testTagAtSegmentStart() {
+        // Tag covers 0-200ms of a 0-1000ms segment
+        let sse = [
+            makeSSE(id: 1, tsUs: 0, isWorking: true),
+            makeSSE(id: 2, tsUs: 1_000_000, isWorking: false)
+        ]
+        let rae = [makeRAE(id: 1, tsUs: 0)]
+        let uee = [
+            makeUEE(id: 1, createdTsUs: 1, op: .tagRange, startTsUs: 0, endTsUs: 200_000, tagName: "standup")
+        ]
+
+        let result = buildEffectiveTimeline(
+            systemStateEvents: sse,
+            rawActivityEvents: rae,
+            userEditEvents: uee,
+            requestedRange: (startUs: 0, endUs: 1_000_000)
+        )
+
+        #expect(result.count == 2)
+        // First: 0-200ms with tag
+        #expect(result[0].startTsUs == 0)
+        #expect(result[0].endTsUs == 200_000)
+        #expect(result[0].tags.contains("standup"))
+        // Second: 200-1000ms no tag
+        #expect(result[1].startTsUs == 200_000)
+        #expect(result[1].endTsUs == 1_000_000)
+        #expect(result[1].tags.isEmpty)
+    }
+
+    @Test("Tag at segment end creates two segments")
+    func testTagAtSegmentEnd() {
+        // Tag covers 800-1000ms of a 0-1000ms segment
+        let sse = [
+            makeSSE(id: 1, tsUs: 0, isWorking: true),
+            makeSSE(id: 2, tsUs: 1_000_000, isWorking: false)
+        ]
+        let rae = [makeRAE(id: 1, tsUs: 0)]
+        let uee = [
+            makeUEE(id: 1, createdTsUs: 1, op: .tagRange, startTsUs: 800_000, endTsUs: 1_000_000, tagName: "wrapup")
+        ]
+
+        let result = buildEffectiveTimeline(
+            systemStateEvents: sse,
+            rawActivityEvents: rae,
+            userEditEvents: uee,
+            requestedRange: (startUs: 0, endUs: 1_000_000)
+        )
+
+        #expect(result.count == 2)
+        // First: 0-800ms no tag
+        #expect(result[0].startTsUs == 0)
+        #expect(result[0].endTsUs == 800_000)
+        #expect(result[0].tags.isEmpty)
+        // Second: 800-1000ms with tag
+        #expect(result[1].startTsUs == 800_000)
+        #expect(result[1].endTsUs == 1_000_000)
+        #expect(result[1].tags.contains("wrapup"))
+    }
+
+    @Test("Untag range only affects overlapping portion")
+    func testPartialUntagOverlap() {
+        // Scenario:
+        // - First tag entire segment with "project"
+        // - Then untag only middle portion 400-600ms
+        let sse = [
+            makeSSE(id: 1, tsUs: 0, isWorking: true),
+            makeSSE(id: 2, tsUs: 1_000_000, isWorking: false)
+        ]
+        let rae = [makeRAE(id: 1, tsUs: 0)]
+        let uee = [
+            makeUEE(id: 1, createdTsUs: 1, op: .tagRange, startTsUs: 0, endTsUs: 1_000_000, tagName: "project"),
+            makeUEE(id: 2, createdTsUs: 2, op: .untagRange, startTsUs: 400_000, endTsUs: 600_000, tagName: "project")
+        ]
+
+        let result = buildEffectiveTimeline(
+            systemStateEvents: sse,
+            rawActivityEvents: rae,
+            userEditEvents: uee,
+            requestedRange: (startUs: 0, endUs: 1_000_000)
+        )
+
+        #expect(result.count == 3)
+        // First: 0-400ms with tag
+        #expect(result[0].startTsUs == 0)
+        #expect(result[0].endTsUs == 400_000)
+        #expect(result[0].tags.contains("project"))
+        // Second: 400-600ms no tag (untagged)
+        #expect(result[1].startTsUs == 400_000)
+        #expect(result[1].endTsUs == 600_000)
+        #expect(!result[1].tags.contains("project"))
+        // Third: 600-1000ms with tag
+        #expect(result[2].startTsUs == 600_000)
+        #expect(result[2].endTsUs == 1_000_000)
+        #expect(result[2].tags.contains("project"))
     }
 }
 
