@@ -178,19 +178,16 @@ struct ActionButtonsView: View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
                 Button("Open Viewer") {
-                    // TODO: Open viewer window
+                    WindowManager.shared.openViewerWindow()
                 }
-                .disabled(true) // Stub
                 Button("Export...") {
-                    // TODO: Open export dialog
+                    WindowManager.shared.openViewerWindow(tab: .exports)
                 }
-                .disabled(true) // Stub
             }
             HStack(spacing: 8) {
                 Button("Preferences...") {
-                    // TODO: Open preferences
+                    WindowManager.shared.openPreferencesWindow()
                 }
-                .disabled(true) // Stub
                 Spacer()
                 Button("Quit") {
                     viewModel.quitApp()
@@ -200,3 +197,51 @@ struct ActionButtonsView: View {
     }
 }
 
+/// Manages application windows (viewer and preferences)
+@MainActor
+final class WindowManager {
+    static let shared = WindowManager()
+
+    private var viewerWindow: NSWindow?
+    private var preferencesWindow: NSWindow?
+
+    private init() {}
+
+    func openViewerWindow(tab: ViewerTab = .timeline) {
+        if let window = viewerWindow, window.isVisible {
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let viewerView = ViewerWindow()
+        let hostingController = NSHostingController(rootView: viewerView)
+
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = "WellWhaddyaKnow Viewer"
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.setContentSize(NSSize(width: 900, height: 600))
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+
+        self.viewerWindow = window
+    }
+
+    func openPreferencesWindow() {
+        if let window = preferencesWindow, window.isVisible {
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let preferencesView = PreferencesWindow()
+        let hostingController = NSHostingController(rootView: preferencesView)
+
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = "Preferences"
+        window.styleMask = [.titled, .closable]
+        window.setContentSize(NSSize(width: 450, height: 350))
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+
+        self.preferencesWindow = window
+    }
+}

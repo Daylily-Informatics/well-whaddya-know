@@ -37,10 +37,16 @@ let package = Package(
             name: "wwkd",
             targets: ["WellWhaddyaKnowAgent"]
         ),
+        .executable(
+            name: "wwk",
+            targets: ["WellWhaddyaKnowCLI"]
+        ),
     ],
     dependencies: [
         // Swift Testing from release/6.0 branch, compatible with Swift 6.0
         .package(url: "https://github.com/apple/swift-testing.git", branch: "release/6.0"),
+        // ArgumentParser for CLI
+        .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0"),
     ],
     targets: [
         // Shared/Storage module
@@ -89,6 +95,23 @@ let package = Package(
             name: "WellWhaddyaKnowAgent",
             dependencies: ["Storage", "Sensors", "CoreModel", "Timeline", "XPCProtocol", "Reporting"],
             path: "Sources/WellWhaddyaKnowAgent",
+            swiftSettings: [
+                .unsafeFlags(["-parse-as-library"])
+            ]
+        ),
+
+        // WellWhaddyaKnowCLI - command line interface (wwk)
+        .executableTarget(
+            name: "WellWhaddyaKnowCLI",
+            dependencies: [
+                "Storage",
+                "CoreModel",
+                "Timeline",
+                "XPCProtocol",
+                "Reporting",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
+            path: "Sources/WellWhaddyaKnowCLI",
             swiftSettings: [
                 .unsafeFlags(["-parse-as-library"])
             ]
@@ -182,6 +205,21 @@ let package = Package(
                 .product(name: "Testing", package: "swift-testing"),
             ],
             path: "Tests/Unit/MenuBarUITests"
+        ),
+
+        // CLI unit tests
+        .testTarget(
+            name: "CLITests",
+            dependencies: [
+                "WellWhaddyaKnowCLI",
+                "Storage",
+                "CoreModel",
+                "Timeline",
+                "XPCProtocol",
+                "Reporting",
+                .product(name: "Testing", package: "swift-testing"),
+            ],
+            path: "Tests/Unit/CLITests"
         ),
     ]
 )
