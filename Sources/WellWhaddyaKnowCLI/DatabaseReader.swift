@@ -117,7 +117,7 @@ final class DatabaseReader {
         let sql = """
             SELECT rae.rae_id, rae.run_id, rae.event_ts_us, rae.event_monotonic_ns,
                    rae.app_id, a.bundle_id, a.display_name, rae.pid,
-                   rae.title_id, wt.title_text, rae.title_status, rae.reason,
+                   rae.title_id, wt.title, rae.title_status, rae.reason,
                    rae.is_working, rae.ax_error_code, rae.payload_json
             FROM raw_activity_events rae
             JOIN applications a ON rae.app_id = a.app_id
@@ -162,14 +162,15 @@ final class DatabaseReader {
     private func loadUserEditEvents() throws -> [UserEditEvent] {
         var events: [UserEditEvent] = []
         let sql = """
-            SELECT uee_id, created_ts_us, created_monotonic_ns,
-                   author_username, author_uid, client, client_version,
-                   op, start_ts_us, end_ts_us,
-                   tag_id, tag_name,
-                   manual_app_bundle_id, manual_app_name, manual_window_title,
-                   note, target_uee_id, payload_json
-            FROM user_edit_events
-            ORDER BY created_ts_us;
+            SELECT u.uee_id, u.created_ts_us, u.created_monotonic_ns,
+                   u.author_username, u.author_uid, u.client, u.client_version,
+                   u.op, u.start_ts_us, u.end_ts_us,
+                   u.tag_id, t.name,
+                   u.manual_app_bundle_id, u.manual_app_name, u.manual_window_title,
+                   u.note, u.target_uee_id, u.payload_json
+            FROM user_edit_events u
+            LEFT JOIN tags t ON u.tag_id = t.tag_id
+            ORDER BY u.created_ts_us;
             """
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }
