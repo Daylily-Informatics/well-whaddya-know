@@ -2,6 +2,7 @@
 // XPCTests.swift - Integration tests for XPC protocol and command handler
 
 import Foundation
+import SQLite3
 import Testing
 @testable import XPCProtocol
 @testable import WellWhaddyaKnowAgent
@@ -152,6 +153,84 @@ struct EditOperationTests {
 
         let ueeId = try ctx.handler.submitAddRange(request)
         #expect(ueeId > 0)
+    }
+
+    @Test("submitAddRange with tags creates tag_range events per SPEC.md Section 9.2")
+    func testSubmitAddRangeWithTags() throws {
+        let ctx = try TestContext.create()
+        defer { ctx.cleanup() }
+
+        let now = Int64(Date().timeIntervalSince1970 * 1_000_000)
+        let startTs = now - 3600_000_000  // 1 hour ago
+        let endTs = now
+
+        // Add range with two tags (tags will be auto-created)
+        let request = AddRangeRequest(
+            startTsUs: startTs,
+            endTsUs: endTs,
+            appName: "Safari",
+            bundleId: "com.apple.Safari",
+            title: "Test Page",
+            tags: ["billable", "meeting"],
+            note: "Manual add with tags"
+        )
+
+        let addRangeId = try ctx.handler.submitAddRange(request)
+        #expect(addRangeId > 0)
+
+        // Verify 3 events were created: 1 add_range + 2 tag_range
+        guard let db = ctx.connection.rawPointer else {
+            Issue.record("Database not open")
+            return
+        }
+
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        let sql = "SELECT COUNT(*) FROM user_edit_events;"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            Issue.record("Failed to prepare statement")
+            return
+        }
+
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            let count = sqlite3_column_int64(stmt, 0)
+            #expect(count == 3, "Expected 3 events (1 add_range + 2 tag_range), got \(count)")
+        }
+        sqlite3_finalize(stmt)
+        stmt = nil
+
+        // Verify the add_range event exists
+        let addRangeSql = "SELECT op FROM user_edit_events WHERE uee_id = \(addRangeId);"
+        guard sqlite3_prepare_v2(db, addRangeSql, -1, &stmt, nil) == SQLITE_OK else {
+            Issue.record("Failed to prepare add_range check")
+            return
+        }
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            let op = String(cString: sqlite3_column_text(stmt, 0))
+            #expect(op == "add_range")
+        }
+        sqlite3_finalize(stmt)
+        stmt = nil
+
+        // Verify the tag_range events exist
+        let tagRangeSql = "SELECT COUNT(*) FROM user_edit_events WHERE op = 'tag_range';"
+        guard sqlite3_prepare_v2(db, tagRangeSql, -1, &stmt, nil) == SQLITE_OK else {
+            Issue.record("Failed to prepare tag_range check")
+            return
+        }
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            let count = sqlite3_column_int64(stmt, 0)
+            #expect(count == 2, "Expected 2 tag_range events, got \(count)")
+        }
+        sqlite3_finalize(stmt)
+        stmt = nil
+
+        // Verify tags were auto-created
+        let tags = try ctx.handler.listTags()
+        #expect(tags.count == 2)
+        let tagNames = Set(tags.map { $0.tagName })
+        #expect(tagNames.contains("billable"))
+        #expect(tagNames.contains("meeting"))
     }
 
     @Test("submitUndoEdit creates undo event")

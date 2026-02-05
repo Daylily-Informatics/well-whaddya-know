@@ -71,9 +71,12 @@ public final class XPCCommandHandler: @unchecked Sendable {
     }
 
     /// Submit an add range edit
+    /// Per SPEC.md Section 9.2: also emits tag_range events for each tag in request.tags
     public func submitAddRange(_ request: AddRangeRequest) throws -> Int64 {
         try XPCInputValidation.validateTimeRange(startTsUs: request.startTsUs, endTsUs: request.endTsUs)
-        return try insertUserEditEvent(
+
+        // First, insert the add_range event
+        let addRangeId = try insertUserEditEvent(
             op: .addRange,
             startTsUs: request.startTsUs,
             endTsUs: request.endTsUs,
@@ -82,6 +85,43 @@ public final class XPCCommandHandler: @unchecked Sendable {
             manualWindowTitle: request.title,
             note: request.note
         )
+
+        // Then, emit tag_range events for each tag (per SPEC.md Section 9.2)
+        for tagName in request.tags {
+            // Validate tag name
+            try XPCInputValidation.validateTagName(tagName)
+
+            // Find or create the tag
+            var tagId = try findTagId(name: tagName)
+            if tagId == nil {
+                // Auto-create tag if it doesn't exist
+                tagId = try createTagInternal(name: tagName)
+            }
+
+            // Insert tag_range event with same time range as the add_range
+            _ = try insertUserEditEvent(
+                op: .tagRange,
+                startTsUs: request.startTsUs,
+                endTsUs: request.endTsUs,
+                tagId: tagId,
+                tagName: tagName
+            )
+        }
+
+        return addRangeId
+    }
+
+    /// Internal helper to create a tag without throwing if it already exists
+    private func createTagInternal(name: String) throws -> Int64 {
+        guard let db = connection.rawPointer else {
+            throw XPCError.databaseError(message: "Database not open")
+        }
+        let tsUs = getCurrentTimestampUs()
+        let sql = "INSERT INTO tags (name, created_ts_us, sort_order) VALUES ('\(escapeSql(name))', \(tsUs), 0);"
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
+            throw XPCError.databaseError(message: String(cString: sqlite3_errmsg(db)))
+        }
+        return sqlite3_last_insert_rowid(db)
     }
 
     /// Submit an undo edit
