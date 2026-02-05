@@ -36,22 +36,9 @@ final class XPCClient: Sendable {
     }
 
     /// Get today's total working seconds.
-    /// Falls back to 0 if XPC fails or no data available.
+    /// Uses direct read-only database access (doesn't require agent).
     /// - Returns: Total working seconds for today
     func getTodayTotalSeconds() async -> Double {
-        // TODO: Implement via XPC or direct read-only DB access
-        // For now, return 0 as placeholder
-        // 
-        // Implementation options:
-        // 1. Add getTodayTotal() to AgentServiceProtocol and call via XPC
-        // 2. Direct read-only SQLite access using App Group container
-        //    - Open DB at ~/Library/Group Containers/group.com.daylily.wellwhaddyaknow/WellWhaddyaKnow/wwk.sqlite
-        //    - Query events for today
-        //    - Build timeline using TimelineBuilder
-        //    - Calculate total using Aggregations.totalWorkingTime()
-        //
-        // Option 2 is preferred for read-only operations as it doesn't
-        // require the agent to be running.
-        return 0.0
+        await TodayTotalCalculator.calculateTodayTotal()
     }
 }
