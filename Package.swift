@@ -17,6 +17,14 @@ let package = Package(
             name: "Sensors",
             targets: ["Sensors"]
         ),
+        .library(
+            name: "CoreModel",
+            targets: ["CoreModel"]
+        ),
+        .library(
+            name: "Timeline",
+            targets: ["Timeline"]
+        ),
         .executable(
             name: "wwkd",
             targets: ["WellWhaddyaKnowAgent"]
@@ -38,6 +46,20 @@ let package = Package(
             name: "Sensors",
             dependencies: [],
             path: "Sources/Shared/Sensors"
+        ),
+
+        // Shared/CoreModel module - in-memory types for timeline processing
+        .target(
+            name: "CoreModel",
+            dependencies: [],
+            path: "Sources/Shared/CoreModel"
+        ),
+
+        // Shared/Timeline module - deterministic timeline builder
+        .target(
+            name: "Timeline",
+            dependencies: ["CoreModel"],
+            path: "Sources/Shared/Timeline"
         ),
 
         // WellWhaddyaKnowAgent - background daemon (wwkd)
@@ -81,6 +103,17 @@ let package = Package(
                 .product(name: "Testing", package: "swift-testing"),
             ],
             path: "Tests/Unit/AgentTests"
+        ),
+
+        // Timeline unit tests
+        .testTarget(
+            name: "TimelineTests",
+            dependencies: [
+                "Timeline",
+                "CoreModel",
+                .product(name: "Testing", package: "swift-testing"),
+            ],
+            path: "Tests/Unit/TimelineTests"
         ),
     ]
 )

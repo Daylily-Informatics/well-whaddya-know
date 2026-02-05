@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:well-whaddya-know}",
+            "name": "Debug wwkd",
+            "target": "wwkd",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug wwkd"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:well-whaddya-know}",
+            "name": "Release wwkd",
+            "target": "wwkd",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release wwkd"
+        }
+    ]
+}
