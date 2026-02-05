@@ -4,22 +4,60 @@
 import Foundation
 import AppKit
 
-/// Main entry point struct
+/// Global agent reference to keep alive across the async/sync boundary
+/// MainActor-isolated for Swift 6 concurrency safety
+@MainActor private var agentRef: Agent?
+
+/// Signal sources kept alive (stored to prevent deallocation)
+/// MainActor-isolated since they're accessed from main queue handlers
+@MainActor private var sigtermSource: DispatchSourceSignal?
+@MainActor private var sigintSource: DispatchSourceSignal?
+
+/// Default database path in app support directory
+private func getDefaultDatabasePath() -> String {
+    let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+    let appDir = appSupport.appendingPathComponent("WellWhaddyaKnow", isDirectory: true)
+
+    // Create directory if it doesn't exist
+    try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+
+    return appDir.appendingPathComponent("wwk.sqlite").path
+}
+
+/// Set up signal handlers for graceful shutdown
+@MainActor
+private func setupSignalHandlers() {
+    // SIGTERM handler
+    let sigterm = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+    sigterm.setEventHandler {
+        print("wwkd: Received SIGTERM, shutting down...")
+        Task { @MainActor in
+            try? await agentRef?.stop()
+            Foundation.exit(0)
+        }
+    }
+    sigterm.resume()
+    signal(SIGTERM, SIG_IGN)
+    sigtermSource = sigterm
+
+    // SIGINT handler
+    let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+    sigint.setEventHandler {
+        print("wwkd: Received SIGINT, shutting down...")
+        Task { @MainActor in
+            try? await agentRef?.stop()
+            Foundation.exit(0)
+        }
+    }
+    sigint.resume()
+    signal(SIGINT, SIG_IGN)
+    sigintSource = sigint
+}
+
+/// Main entry point using @main struct
 @main
 struct WWKDMain {
-
-    /// Default database path in app support directory
-    static func getDefaultDatabasePath() -> String {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let appDir = appSupport.appendingPathComponent("WellWhaddyaKnow", isDirectory: true)
-
-        // Create directory if it doesn't exist
-        try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
-
-        return appDir.appendingPathComponent("wwk.sqlite").path
-    }
-
-    /// Main entry point - async main for Swift 6 concurrency
+    @MainActor
     static func main() async throws {
         print("wwkd: Starting WellWhaddyaKnow background agent v\(Agent.agentVersion)")
 
@@ -34,51 +72,30 @@ struct WWKDMain {
 
         print("wwkd: Database path: \(dbPath)")
 
-        do {
-            // Create agent and configure sensors (two-phase initialization)
-            let agent = try Agent(databasePath: dbPath)
-            await agent.configureSensors()
+        // Set up signal handlers before starting
+        setupSignalHandlers()
 
-            // Set up signal handlers for graceful shutdown
-            let signalSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-            signalSource.setEventHandler {
-                Task {
-                    print("wwkd: Received SIGTERM, shutting down...")
-                    try? await agent.stop()
-                    Foundation.exit(0)
-                }
-            }
-            signalSource.resume()
-            signal(SIGTERM, SIG_IGN)
+        // Create agent and configure sensors (two-phase initialization)
+        let agent = try Agent(databasePath: dbPath)
+        await agent.configureSensors()
 
-            let sigintSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-            sigintSource.setEventHandler {
-                Task {
-                    print("wwkd: Received SIGINT, shutting down...")
-                    try? await agent.stop()
-                    Foundation.exit(0)
-                }
-            }
-            sigintSource.resume()
-            signal(SIGINT, SIG_IGN)
+        // Store global reference to keep agent alive
+        agentRef = agent
 
-            // Start the agent
-            try await agent.start()
-            print("wwkd: Agent started successfully")
+        // Start the agent
+        try await agent.start()
+        print("wwkd: Agent started successfully")
 
-            // Keep the process alive using dispatchMain() which runs the main dispatch queue
-            // This allows run loop events (notifications) to be processed
-            // We need to call this from a non-async context
-            await withUnsafeContinuation { (_: UnsafeContinuation<Void, Never>) in
-                DispatchQueue.main.async {
-                    // This never returns - the process runs forever until a signal is received
-                    dispatchMain()
-                }
-            }
-
-        } catch {
-            print("wwkd: Fatal error: \(error)")
-            Foundation.exit(1)
+        // Keep the process alive forever.
+        // The Swift async main will keep running until we exit.
+        // Sensors use NSWorkspace notifications and timers which are
+        // processed by the Swift cooperative executor's run loop integration.
+        // We just need to never return from main().
+        while true {
+            // Sleep for a long time, yielding to other tasks.
+            // This keeps the process alive while allowing the
+            // cooperative executor to process notification callbacks.
+            try await Task.sleep(for: .seconds(86400)) // Sleep for 1 day
         }
     }
 }
