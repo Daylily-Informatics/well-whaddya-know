@@ -2,6 +2,9 @@
 // ViewerWindow.swift - Viewer/Editor window per SPEC.md Section 9.2
 
 import SwiftUI
+import CoreModel
+import Timeline
+import XPCProtocol
 
 /// Viewer/Editor window with Timeline, Tags, and Exports tabs
 struct ViewerWindow: View {
@@ -66,18 +69,52 @@ final class ViewerViewModel: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
 
+    private let xpcClient = XPCClient()
+
     func loadTimeline(for date: Date) async {
         isLoading = true
         defer { isLoading = false }
 
-        // In a real implementation, this would read from the database
-        // For now, we use placeholder data
-        segments = []
+        // Calculate time range for the selected date (full day)
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: date)
+        guard let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay) else {
+            return
+        }
+
+        let startTsUs = Int64(startOfDay.timeIntervalSince1970 * 1_000_000)
+        let endTsUs = Int64(endOfDay.timeIntervalSince1970 * 1_000_000)
+
+        // Read timeline from database
+        let effectiveSegments = await ViewerDatabaseReader.loadTimeline(
+            startTsUs: startTsUs,
+            endTsUs: endTsUs
+        )
+
+        // Convert to display segments
+        segments = effectiveSegments.map { seg in
+            TimelineSegment(
+                startTime: Date(timeIntervalSince1970: Double(seg.startTsUs) / 1_000_000),
+                endTime: Date(timeIntervalSince1970: Double(seg.endTsUs) / 1_000_000),
+                appName: seg.appName,
+                bundleId: seg.appBundleId,
+                windowTitle: seg.windowTitle,
+                tags: seg.tags,
+                isGap: seg.coverage == .unobservedGap
+            )
+        }
     }
 
     func loadTags() async {
         // Load tags from database
-        tags = []
+        tags = await ViewerDatabaseReader.loadTags().map { dbTag in
+            TagItem(
+                id: dbTag.tagId,
+                name: dbTag.name,
+                createdDate: Date(timeIntervalSince1970: Double(dbTag.createdTsUs) / 1_000_000),
+                isRetired: dbTag.isRetired
+            )
+        }
     }
 }
 
@@ -92,7 +129,7 @@ struct TimelineSegment: Identifiable {
     let tags: [String]
     let isGap: Bool
 
-    var duration: TimeInterval {
+    var duration: Foundation.TimeInterval {
         endTime.timeIntervalSince(startTime)
     }
 }
