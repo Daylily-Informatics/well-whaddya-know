@@ -35,8 +35,9 @@ struct WWKDMain {
         print("wwkd: Database path: \(dbPath)")
 
         do {
-            // Create and start agent
+            // Create agent and configure sensors (two-phase initialization)
             let agent = try Agent(databasePath: dbPath)
+            await agent.configureSensors()
 
             // Set up signal handlers for graceful shutdown
             let signalSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)

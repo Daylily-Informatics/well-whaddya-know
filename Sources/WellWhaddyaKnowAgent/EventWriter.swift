@@ -41,7 +41,7 @@ public final class EventWriter: @unchecked Sendable {
         tzOffsetSeconds: Int,
         payloadJson: String? = nil
     ) throws {
-        let payloadValue = payloadJson.map { "'\($0)'" } ?? "NULL"
+        let payloadValue = payloadJson.map { "'\(escapeSql($0))'" } ?? "NULL"
         
         let sql = """
             INSERT INTO system_state_events (

@@ -58,10 +58,12 @@ extension Agent {
         // Per SPEC.md 5.5.C: don't assume unlocked after wake
         state.isSystemAwake = true
         
-        // Re-probe session state
-        let sessionState = sessionSensor.probeCurrentState()
-        state.isSessionOnConsole = sessionState.isOnConsole
-        state.isScreenLocked = sessionState.isScreenLocked
+        // Re-probe session state (sensor is guaranteed to exist after start())
+        if let sessionSensor = sessionSensor {
+            let sessionState = sessionSensor.probeCurrentState()
+            state.isSessionOnConsole = sessionState.isOnConsole
+            state.isScreenLocked = sessionState.isScreenLocked
+        }
         
         try emitSystemStateEvent(
             timestampUs: timestampUs,
@@ -145,8 +147,9 @@ extension Agent {
     }
     
     func emitInitialActivityEvent(timestampUs: Int64, monotonicNs: UInt64) async throws {
-        // Get current frontmost app
-        guard let appInfo = foregroundAppSensor.getCurrentFrontmostApp() else { return }
+        // Get current frontmost app (sensor is guaranteed to exist after start())
+        guard let foregroundAppSensor = foregroundAppSensor,
+              let appInfo = foregroundAppSensor.getCurrentFrontmostApp() else { return }
         
         let appId = try eventWriter.ensureApplication(
             bundleId: appInfo.bundleId,
