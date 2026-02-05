@@ -1,5 +1,8 @@
 # well-whaddya-know (macOS) Implementation Specification
 
+> This specification is frozen. Implementations must follow it exactly.
+> Changes require an explicit revision.
+
 A macOS-only, local-only time tracker that counts **working time strictly as “screen is unlocked”**, and attributes that time continuously to the **foreground application + window title**.
 
 This document is an implementation spec (not code). It is written to be handed to an implementation model for mechanical build-out.
@@ -1248,6 +1251,37 @@ Threat: Forensics
 * Migration tests: schema upgrades must preserve all prior data.
 
 ---
+
+### 14.4 Testing
+## Testing policy (normative)
+
+Testing is a first-class requirement of this specification.
+
+### General rules
+
+* All public functions, methods, and exported APIs **must** have direct unit test coverage.
+* All CLI subcommands **must** have at least one test covering:
+  * successful execution
+  * invalid input or error handling
+* Tests are written **as development proceeds**, not deferred.
+* A feature or module is considered incomplete if corresponding tests are missing.
+
+### Scope-specific requirements
+
+* Storage and schema code:
+  * Every mutation path must be covered by tests.
+  * Immutability guarantees must be asserted by failing tests.
+* Timeline builder:
+  * All edge cases described in the spec must be covered by fixture-driven tests.
+  * Determinism must be verified by repeated runs against the same fixtures.
+* CLI:
+  * Each top-level command and subcommand requires explicit tests.
+  * CLI output must be testable in both human-readable and `--json` modes where applicable.
+
+### Enforcement
+
+* Code that introduces new public behavior without tests is **non-compliant with this specification**.
+* Test coverage is expected to grow monotonically with functionality.
 
 ## Implementation acceptance criteria (must-pass checks)
 
