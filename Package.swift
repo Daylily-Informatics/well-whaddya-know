@@ -25,6 +25,14 @@ let package = Package(
             name: "Timeline",
             targets: ["Timeline"]
         ),
+        .library(
+            name: "XPCProtocol",
+            targets: ["XPCProtocol"]
+        ),
+        .library(
+            name: "Reporting",
+            targets: ["Reporting"]
+        ),
         .executable(
             name: "wwkd",
             targets: ["WellWhaddyaKnowAgent"]
@@ -62,10 +70,24 @@ let package = Package(
             path: "Sources/Shared/Timeline"
         ),
 
+        // Shared/XPCProtocol module - XPC interface definitions
+        .target(
+            name: "XPCProtocol",
+            dependencies: ["CoreModel"],
+            path: "Sources/Shared/XPCProtocol"
+        ),
+
+        // Shared/Reporting module - CSV/JSON export
+        .target(
+            name: "Reporting",
+            dependencies: ["CoreModel", "Timeline"],
+            path: "Sources/Shared/Reporting"
+        ),
+
         // WellWhaddyaKnowAgent - background daemon (wwkd)
         .executableTarget(
             name: "WellWhaddyaKnowAgent",
-            dependencies: ["Storage", "Sensors"],
+            dependencies: ["Storage", "Sensors", "CoreModel", "Timeline", "XPCProtocol", "Reporting"],
             path: "Sources/WellWhaddyaKnowAgent",
             swiftSettings: [
                 .unsafeFlags(["-parse-as-library"])
@@ -114,6 +136,21 @@ let package = Package(
                 .product(name: "Testing", package: "swift-testing"),
             ],
             path: "Tests/Unit/TimelineTests"
+        ),
+
+        // XPC integration tests
+        .testTarget(
+            name: "XPCTests",
+            dependencies: [
+                "WellWhaddyaKnowAgent",
+                "XPCProtocol",
+                "Reporting",
+                "Timeline",
+                "CoreModel",
+                "Storage",
+                .product(name: "Testing", package: "swift-testing"),
+            ],
+            path: "Tests/Integration/XPCTests"
         ),
     ]
 )
