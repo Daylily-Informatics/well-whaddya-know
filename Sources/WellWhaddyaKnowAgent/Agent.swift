@@ -36,6 +36,10 @@ public actor Agent: SensorEventHandler {
     var currentAppId: Int64?
     var currentPid: pid_t = 0
 
+    // Track last event timestamps for clock change detection (SPEC.md 5.5.F)
+    var lastEventTsUs: Int64 = 0
+    var lastEventMonotonicNs: UInt64 = 0
+
     // MARK: - Initialization
 
     public init(databasePath: String) throws {

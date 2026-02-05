@@ -131,10 +131,21 @@ extension Agent {
     }
     
     // MARK: - Helper Methods
-    
+
     func emitSystemStateEvent(timestampUs: Int64, monotonicNs: UInt64, kind: SystemStateEventKind, source: SensorSource) throws {
+        // Check for clock change if we have previous timestamps (SPEC.md 5.5.F)
+        // Don't check on agent_start (first event) or if this is already a clock_change event
+        if lastEventTsUs > 0 && kind != .clockChange {
+            _ = try? checkAndEmitClockChange(
+                currentTimestampUs: timestampUs,
+                currentMonotonicNs: monotonicNs,
+                previousTimestampUs: lastEventTsUs,
+                previousMonotonicNs: lastEventMonotonicNs
+            )
+        }
+
         let tz = TimeZone.current
-        
+
         try eventWriter.insertSystemStateEvent(
             eventTsUs: timestampUs,
             eventMonotonicNs: monotonicNs,
@@ -144,6 +155,10 @@ extension Agent {
             tzIdentifier: tz.identifier,
             tzOffsetSeconds: tz.secondsFromGMT()
         )
+
+        // Update tracking variables for next clock change check
+        lastEventTsUs = timestampUs
+        lastEventMonotonicNs = monotonicNs
     }
     
     func emitInitialActivityEvent(timestampUs: Int64, monotonicNs: UInt64) async throws {
