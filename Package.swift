@@ -127,6 +127,16 @@ let package = Package(
             path: "Tests/Unit/AgentTests"
         ),
 
+        // CoreModel unit tests
+        .testTarget(
+            name: "CoreModelTests",
+            dependencies: [
+                "CoreModel",
+                .product(name: "Testing", package: "swift-testing"),
+            ],
+            path: "Tests/Unit/CoreModelTests"
+        ),
+
         // Timeline unit tests
         .testTarget(
             name: "TimelineTests",
