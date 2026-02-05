@@ -41,6 +41,10 @@ let package = Package(
             name: "wwk",
             targets: ["WellWhaddyaKnowCLI"]
         ),
+        .executable(
+            name: "WellWhaddyaKnow",
+            targets: ["WellWhaddyaKnowApp"]
+        ),
     ],
     dependencies: [
         // Swift Testing from release/6.0 branch, compatible with Swift 6.0
@@ -112,6 +116,22 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             path: "Sources/WellWhaddyaKnowCLI",
+            swiftSettings: [
+                .unsafeFlags(["-parse-as-library"])
+            ]
+        ),
+
+        // WellWhaddyaKnowApp - menu bar application
+        .executableTarget(
+            name: "WellWhaddyaKnowApp",
+            dependencies: [
+                "Storage",
+                "CoreModel",
+                "Timeline",
+                "XPCProtocol",
+                "Reporting",
+            ],
+            path: "Sources/WellWhaddyaKnowApp",
             swiftSettings: [
                 .unsafeFlags(["-parse-as-library"])
             ]

@@ -150,7 +150,7 @@ struct DateNavigationBar: View {
 
             DatePicker("", selection: $selectedDate, displayedComponents: .date)
                 .labelsHidden()
-                .onChange(of: selectedDate) { _, newValue in
+                .onChange(of: selectedDate) { newValue in
                     onDateChange(newValue)
                 }
 

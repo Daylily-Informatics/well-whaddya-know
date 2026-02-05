@@ -19,6 +19,46 @@
             "target": "wwkd",
             "configuration": "release",
             "preLaunchTask": "swift: Build Release wwkd"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:well-whaddya-know}",
+            "name": "Debug wwk",
+            "target": "wwk",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug wwk"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:well-whaddya-know}",
+            "name": "Release wwk",
+            "target": "wwk",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release wwk"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:well-whaddya-know}",
+            "name": "Debug WellWhaddyaKnow",
+            "target": "WellWhaddyaKnow",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug WellWhaddyaKnow"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:well-whaddya-know}",
+            "name": "Release WellWhaddyaKnow",
+            "target": "WellWhaddyaKnow",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release WellWhaddyaKnow"
         }
     ]
 }
