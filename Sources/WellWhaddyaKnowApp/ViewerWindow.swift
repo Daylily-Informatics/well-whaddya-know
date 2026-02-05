@@ -116,6 +116,83 @@ final class ViewerViewModel: ObservableObject {
             )
         }
     }
+
+    // MARK: - Edit Operations
+
+    func deleteRange(startTime: Date, endTime: Date, note: String? = nil) async {
+        let startTsUs = Int64(startTime.timeIntervalSince1970 * 1_000_000)
+        let endTsUs = Int64(endTime.timeIntervalSince1970 * 1_000_000)
+
+        let request = DeleteRangeRequest(
+            startTsUs: startTsUs,
+            endTsUs: endTsUs,
+            note: note
+        )
+
+        do {
+            let _ = try await xpcClient.deleteRange(request)
+            // Reload timeline after edit
+            await loadTimeline(for: selectedDate)
+        } catch {
+            errorMessage = "Delete failed: \(error.localizedDescription)"
+        }
+    }
+
+    func applyTag(startTime: Date, endTime: Date, tagName: String) async {
+        let startTsUs = Int64(startTime.timeIntervalSince1970 * 1_000_000)
+        let endTsUs = Int64(endTime.timeIntervalSince1970 * 1_000_000)
+
+        let request = TagRangeRequest(
+            startTsUs: startTsUs,
+            endTsUs: endTsUs,
+            tagName: tagName
+        )
+
+        do {
+            let _ = try await xpcClient.applyTag(request)
+            // Reload timeline after edit
+            await loadTimeline(for: selectedDate)
+        } catch {
+            errorMessage = "Apply tag failed: \(error.localizedDescription)"
+        }
+    }
+
+    func removeTag(startTime: Date, endTime: Date, tagName: String) async {
+        let startTsUs = Int64(startTime.timeIntervalSince1970 * 1_000_000)
+        let endTsUs = Int64(endTime.timeIntervalSince1970 * 1_000_000)
+
+        let request = TagRangeRequest(
+            startTsUs: startTsUs,
+            endTsUs: endTsUs,
+            tagName: tagName
+        )
+
+        do {
+            let _ = try await xpcClient.removeTag(request)
+            // Reload timeline after edit
+            await loadTimeline(for: selectedDate)
+        } catch {
+            errorMessage = "Remove tag failed: \(error.localizedDescription)"
+        }
+    }
+
+    func createTag(name: String) async {
+        do {
+            let _ = try await xpcClient.createTag(name: name)
+            await loadTags()
+        } catch {
+            errorMessage = "Create tag failed: \(error.localizedDescription)"
+        }
+    }
+
+    func retireTag(name: String) async {
+        do {
+            try await xpcClient.retireTag(name: name)
+            await loadTags()
+        } catch {
+            errorMessage = "Retire tag failed: \(error.localizedDescription)"
+        }
+    }
 }
 
 /// Represents a timeline segment for display
@@ -168,8 +245,19 @@ struct TimelineTabView: View {
             } else if viewModel.segments.isEmpty {
                 EmptyTimelineView()
             } else {
-                TimelineListView(segments: viewModel.segments)
+                TimelineListView(segments: viewModel.segments, viewModel: viewModel)
             }
+
+            // Error message
+            if let errorMessage = viewModel.errorMessage {
+                Text(errorMessage)
+                    .foregroundColor(.red)
+                    .font(.caption)
+                    .padding(.horizontal)
+            }
+        }
+        .task {
+            await viewModel.loadTimeline(for: viewModel.selectedDate)
         }
     }
 }
@@ -243,16 +331,69 @@ struct EmptyTimelineView: View {
 
 struct TimelineListView: View {
     let segments: [TimelineSegment]
+    @ObservedObject var viewModel: ViewerViewModel
+    @State private var showingTagSheet = false
+    @State private var selectedSegment: TimelineSegment?
+    @State private var selectedTagName: String = ""
 
     var body: some View {
         List(segments) { segment in
-            TimelineRow(segment: segment)
+            TimelineRow(segment: segment, tags: segment.tags)
+                .contextMenu {
+                    Button(role: .destructive) {
+                        Task {
+                            await viewModel.deleteRange(
+                                startTime: segment.startTime,
+                                endTime: segment.endTime
+                            )
+                        }
+                    } label: {
+                        Label("Delete Segment", systemImage: "trash")
+                    }
+
+                    Divider()
+
+                    Menu("Apply Tag") {
+                        ForEach(viewModel.tags.filter { !$0.isRetired }) { tag in
+                            Button(tag.name) {
+                                Task {
+                                    await viewModel.applyTag(
+                                        startTime: segment.startTime,
+                                        endTime: segment.endTime,
+                                        tagName: tag.name
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if !segment.tags.isEmpty {
+                        Menu("Remove Tag") {
+                            ForEach(segment.tags, id: \.self) { tagName in
+                                Button(tagName) {
+                                    Task {
+                                        await viewModel.removeTag(
+                                            startTime: segment.startTime,
+                                            endTime: segment.endTime,
+                                            tagName: tagName
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+        }
+        .task {
+            // Load tags for context menu
+            await viewModel.loadTags()
         }
     }
 }
 
 struct TimelineRow: View {
     let segment: TimelineSegment
+    let tags: [String]
 
     var body: some View {
         HStack {
@@ -264,6 +405,19 @@ struct TimelineRow: View {
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .lineLimit(1)
+                }
+                // Show tags if present
+                if !tags.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(tags, id: \.self) { tag in
+                            Text(tag)
+                                .font(.caption2)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.accentColor.opacity(0.2))
+                                .cornerRadius(4)
+                        }
+                    }
                 }
             }
 
@@ -308,6 +462,7 @@ struct TagsTabView: View {
             // Toolbar
             HStack {
                 Button("Create Tag") {
+                    newTagName = ""
                     showingCreateSheet = true
                 }
                 Spacer()
@@ -321,12 +476,24 @@ struct TagsTabView: View {
                 EmptyTagsView()
             } else {
                 List(viewModel.tags) { tag in
-                    TagRow(tag: tag)
+                    TagRow(tag: tag, onRetire: {
+                        Task {
+                            await viewModel.retireTag(name: tag.name)
+                        }
+                    })
                 }
             }
         }
         .sheet(isPresented: $showingCreateSheet) {
-            CreateTagSheet(tagName: $newTagName, isPresented: $showingCreateSheet)
+            CreateTagSheet(
+                tagName: $newTagName,
+                isPresented: $showingCreateSheet,
+                onCreate: { name in
+                    Task {
+                        await viewModel.createTag(name: name)
+                    }
+                }
+            )
         }
         .task {
             await viewModel.loadTags()
@@ -352,6 +519,7 @@ struct EmptyTagsView: View {
 
 struct TagRow: View {
     let tag: TagItem
+    var onRetire: (() -> Void)?
 
     var body: some View {
         HStack {
@@ -361,6 +529,13 @@ struct TagRow: View {
                 Text("Retired")
                     .font(.caption)
                     .foregroundColor(.secondary)
+            } else if let onRetire = onRetire {
+                Button(action: onRetire) {
+                    Text("Retire")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
+                .buttonStyle(.borderless)
             }
         }
     }
@@ -369,6 +544,7 @@ struct TagRow: View {
 struct CreateTagSheet: View {
     @Binding var tagName: String
     @Binding var isPresented: Bool
+    var onCreate: ((String) -> Void)?
 
     var body: some View {
         VStack(spacing: 16) {
@@ -380,6 +556,7 @@ struct CreateTagSheet: View {
 
             HStack {
                 Button("Cancel") {
+                    tagName = ""
                     isPresented = false
                 }
                 .keyboardShortcut(.cancelAction)
@@ -387,7 +564,8 @@ struct CreateTagSheet: View {
                 Spacer()
 
                 Button("Create") {
-                    // TODO: Create tag via XPC
+                    onCreate?(tagName)
+                    tagName = ""
                     isPresented = false
                 }
                 .keyboardShortcut(.defaultAction)
