@@ -1,38 +1,95 @@
 // SPDX-License-Identifier: MIT
-// XPCClient.swift - XPC connection to background agent
+// XPCClient.swift - IPC connection to background agent
 
 import Foundation
 import XPCProtocol
 
-/// XPC client for communicating with the background agent.
+/// Client for communicating with the background agent via Unix domain socket.
 /// Provides status polling and today's total calculation.
 @MainActor
 final class XPCClient: Sendable {
-    private let serviceName: String
+    private let ipcClient: IPCClient
 
-    init(serviceName: String = xpcServiceName) {
-        self.serviceName = serviceName
+    init() {
+        self.ipcClient = IPCClient()
     }
 
-    /// Get the current agent status via XPC.
+    /// Check if agent socket exists
+    var isAgentAvailable: Bool {
+        ipcClient.isAgentAvailable
+    }
+
+    /// Get the current agent status via IPC.
     /// - Returns: StatusResponse from the agent
     /// - Throws: XPCError.agentNotRunning if connection fails
     func getStatus() async throws -> StatusResponse {
-        // Create XPC connection to the agent (Mach service for launchd-managed daemon)
-        let connection = NSXPCConnection(machServiceName: serviceName, options: [])
-        connection.remoteObjectInterface = NSXPCInterface(with: NSObjectProtocol.self)
+        do {
+            return try await ipcClient.getStatus()
+        } catch IPCClientError.agentNotRunning {
+            throw XPCError.agentNotRunning
+        } catch IPCClientError.connectionFailed {
+            throw XPCError.agentNotRunning
+        } catch {
+            // Any other IPC error means agent is effectively unreachable
+            throw XPCError.agentNotRunning
+        }
+    }
 
-        connection.resume()
-        defer { connection.invalidate() }
+    /// Get agent health status
+    func getHealth() async throws -> HealthStatus {
+        do {
+            return try await ipcClient.getHealth()
+        } catch IPCClientError.agentNotRunning {
+            throw XPCError.agentNotRunning
+        } catch {
+            // Any other IPC error means agent is effectively unreachable
+            throw XPCError.agentNotRunning
+        }
+    }
 
-        // For now, return a mock response since the agent XPC server
-        // is not yet implemented with proper NSXPCConnection handling.
-        // This will be replaced with actual XPC calls when the agent
-        // implements NSXPCListenerDelegate.
-        
-        // TODO: Implement actual XPC call when agent supports it
-        // For now, check if agent process is running and return mock data
-        throw XPCError.agentNotRunning
+    /// Delete a time range
+    func deleteRange(_ request: DeleteRangeRequest) async throws -> Int64 {
+        try await ipcClient.deleteRange(request)
+    }
+
+    /// Add a time range
+    func addRange(_ request: AddRangeRequest) async throws -> Int64 {
+        try await ipcClient.addRange(request)
+    }
+
+    /// Undo an edit
+    func undoEdit(targetUeeId: Int64) async throws -> Int64 {
+        try await ipcClient.undoEdit(targetUeeId: targetUeeId)
+    }
+
+    /// Apply a tag to a time range
+    func applyTag(_ request: TagRangeRequest) async throws -> Int64 {
+        try await ipcClient.applyTag(request)
+    }
+
+    /// Remove a tag from a time range
+    func removeTag(_ request: TagRangeRequest) async throws -> Int64 {
+        try await ipcClient.removeTag(request)
+    }
+
+    /// List all tags
+    func listTags() async throws -> [TagInfo] {
+        try await ipcClient.listTags()
+    }
+
+    /// Create a new tag
+    func createTag(name: String) async throws -> Int64 {
+        try await ipcClient.createTag(name: name)
+    }
+
+    /// Retire a tag
+    func retireTag(name: String) async throws {
+        try await ipcClient.retireTag(name: name)
+    }
+
+    /// Export timeline
+    func exportTimeline(_ request: ExportRequest) async throws {
+        try await ipcClient.exportTimeline(request)
     }
 
     /// Get today's total working seconds.
