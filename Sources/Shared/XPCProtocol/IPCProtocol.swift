@@ -108,22 +108,30 @@ public enum IPCErrorCode {
 
 public enum IPCClientError: Error, LocalizedError, Sendable {
     case connectionFailed(String)
+    case sendFailed(String)
+    case receiveFailed(String)
+    case invalidResponse(String)
     case serverError(code: Int, message: String)
     case emptyResponse
     case encodingError(String)
     case decodingError(String)
     case timeout
     case socketClosed
-    
+    case agentNotRunning
+
     public var errorDescription: String? {
         switch self {
         case .connectionFailed(let msg): return "Connection failed: \(msg)"
-        case .serverError(_, let msg): return msg
+        case .sendFailed(let msg): return "Send failed: \(msg)"
+        case .receiveFailed(let msg): return "Receive failed: \(msg)"
+        case .invalidResponse(let msg): return "Invalid response: \(msg)"
+        case .serverError(let code, let msg): return "[\(code)] \(msg)"
         case .emptyResponse: return "Empty response from server"
         case .encodingError(let msg): return "Encoding error: \(msg)"
         case .decodingError(let msg): return "Decoding error: \(msg)"
         case .timeout: return "Request timed out"
         case .socketClosed: return "Socket connection closed"
+        case .agentNotRunning: return "Agent is not running"
         }
     }
 }
