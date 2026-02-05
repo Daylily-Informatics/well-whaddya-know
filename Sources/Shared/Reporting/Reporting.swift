@@ -25,7 +25,7 @@ public struct ReportIdentity: Sendable, Codable, Equatable {
 /// CSV exporter for effective segments per SPEC.md Section 8.4
 public enum CSVExporter {
     
-    /// CSV header row per SPEC.md Section 8.4
+    /// CSV header row per SPEC.md Section 8.4 (13 columns including coverage)
     public static let header = [
         "machine_id",
         "username",
@@ -38,7 +38,8 @@ public enum CSVExporter {
         "app_bundle_id",
         "app_name",
         "window_title",
-        "tags"
+        "tags",
+        "coverage"
     ].joined(separator: ",")
 
     /// Export segments to CSV string
@@ -56,7 +57,10 @@ public enum CSVExporter {
     ) -> String {
         var lines: [String] = [header]
 
-        for segment in segments {
+        // Sort by start time for deterministic output
+        let sortedSegments = segments.sorted { $0.startTsUs < $1.startTsUs }
+
+        for segment in sortedSegments {
             let row = formatRow(
                 segment: segment,
                 identity: identity,
@@ -94,7 +98,8 @@ public enum CSVExporter {
             escapeCSV(segment.appBundleId),
             escapeCSV(segment.appName),
             escapeCSV(title),
-            escapeCSV(tagsStr)
+            escapeCSV(tagsStr),
+            segment.coverage.rawValue
         ]
 
         return fields.joined(separator: ",")

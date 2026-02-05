@@ -138,6 +138,18 @@ let package = Package(
             path: "Tests/Unit/TimelineTests"
         ),
 
+        // Reporting unit tests
+        .testTarget(
+            name: "ReportingTests",
+            dependencies: [
+                "Reporting",
+                "Timeline",
+                "CoreModel",
+                .product(name: "Testing", package: "swift-testing"),
+            ],
+            path: "Tests/Unit/ReportingTests"
+        ),
+
         // XPC integration tests
         .testTarget(
             name: "XPCTests",
