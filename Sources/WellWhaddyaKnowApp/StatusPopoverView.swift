@@ -2,6 +2,7 @@
 // StatusPopoverView.swift - SwiftUI popover content for menu bar UI
 
 import SwiftUI
+import AppKit
 
 /// Main popover view displaying current status and controls.
 struct StatusPopoverView: View {
