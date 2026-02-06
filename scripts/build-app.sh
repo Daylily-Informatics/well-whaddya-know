@@ -27,7 +27,7 @@ echo "Building $APP_NAME ($BUILD_CONFIG)..."
 
 # Build the executable and the agent
 swift build $BUILD_FLAGS --product WellWhaddyaKnow
-swift build $BUILD_FLAGS --product WellWhaddyaKnowAgent
+swift build $BUILD_FLAGS --product wwkd
 
 # Create app bundle structure
 rm -rf "$APP_BUNDLE"
@@ -39,7 +39,7 @@ mkdir -p "$CONTENTS_DIR/Library/LaunchAgents"
 cp "$PROJECT_ROOT/.build/$BUILD_CONFIG/WellWhaddyaKnow" "$MACOS_DIR/$APP_NAME"
 
 # Embed agent binary in app bundle (required for SMAppService)
-cp "$PROJECT_ROOT/.build/$BUILD_CONFIG/WellWhaddyaKnowAgent" "$MACOS_DIR/wwkd"
+cp "$PROJECT_ROOT/.build/$BUILD_CONFIG/wwkd" "$MACOS_DIR/wwkd"
 
 # Embed launchd agent plist (required for SMAppService.agent(plistName:))
 cp "$PROJECT_ROOT/Sources/WellWhaddyaKnowApp/LaunchAgents/com.daylily.wellwhaddyaknow.agent.plist" \
@@ -84,7 +84,7 @@ if [ -n "$SIGN_IDENTITY" ]; then
         --entitlements "$ENTITLEMENTS" \
         "$APP_BUNDLE"
     # Also sign the standalone agent build artifact
-    AGENT_BIN="$PROJECT_ROOT/.build/$BUILD_CONFIG/WellWhaddyaKnowAgent"
+    AGENT_BIN="$PROJECT_ROOT/.build/$BUILD_CONFIG/wwkd"
     if [ -f "$AGENT_BIN" ]; then
         codesign --force --sign "$SIGN_IDENTITY" "$AGENT_BIN"
         echo "Signed standalone agent: $AGENT_BIN"
