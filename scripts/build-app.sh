@@ -47,8 +47,37 @@ cp "$PROJECT_ROOT/Sources/WellWhaddyaKnowApp/PrivacyInfo.xcprivacy" "$RESOURCES_
 # Create PkgInfo
 echo -n "APPL????" > "$CONTENTS_DIR/PkgInfo"
 
-# Sign the app (ad-hoc for local testing)
-codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null || true
+# Sign the app with developer identity (falls back to ad-hoc)
+SIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
+if [ -z "$SIGN_IDENTITY" ]; then
+    # Auto-detect: pick the first valid codesigning identity
+    SIGN_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+        | grep "Apple Development" \
+        | head -1 \
+        | sed 's/.*"\(.*\)"/\1/' || true)
+fi
+
+ENTITLEMENTS="$PROJECT_ROOT/Sources/WellWhaddyaKnowApp/WellWhaddyaKnow.entitlements"
+
+if [ -n "$SIGN_IDENTITY" ]; then
+    echo "Signing with: $SIGN_IDENTITY"
+    codesign --force --sign "$SIGN_IDENTITY" \
+        --entitlements "$ENTITLEMENTS" \
+        "$MACOS_DIR/$APP_NAME"
+    codesign --force --sign "$SIGN_IDENTITY" \
+        --entitlements "$ENTITLEMENTS" \
+        "$APP_BUNDLE"
+    # Also sign the agent if it exists
+    AGENT_BIN="$PROJECT_ROOT/.build/$BUILD_CONFIG/wwkd"
+    if [ -f "$AGENT_BIN" ]; then
+        codesign --force --sign "$SIGN_IDENTITY" "$AGENT_BIN"
+        echo "Signed agent: $AGENT_BIN"
+    fi
+else
+    echo "⚠ No Apple Development identity found — using ad-hoc signing"
+    echo "  Accessibility permissions may reset on each rebuild"
+    codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null || true
+fi
 
 echo ""
 echo "✅ Built: $APP_BUNDLE"
