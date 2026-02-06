@@ -33,17 +33,20 @@ final class TodayTotalCalculator {
     }
     
     /// Calculate today's total working seconds
+    /// - Parameter isCurrentlyWorking: Whether the agent is currently tracking.
+    ///   When `false`, the timeline range ends at the last system_state_event timestamp
+    ///   so the total does not keep growing while tracking is paused.
     /// - Returns: Total working seconds for today, or 0 if unavailable
-    static func calculateTodayTotal() async -> Double {
+    static func calculateTodayTotal(isCurrentlyWorking: Bool) async -> Double {
         guard let dbPath = databasePath else {
             return 0.0
         }
-        
+
         // Check if database exists
         guard FileManager.default.fileExists(atPath: dbPath) else {
             return 0.0
         }
-        
+
         // Calculate today's time range in microseconds
         let calendar = Calendar.current
         let now = Date()
@@ -51,8 +54,8 @@ final class TodayTotalCalculator {
             return 0.0
         }
         let startTsUs = Int64(startOfDay.timeIntervalSince1970 * 1_000_000)
-        let endTsUs = Int64(now.timeIntervalSince1970 * 1_000_000)
-        
+        let nowUs = Int64(now.timeIntervalSince1970 * 1_000_000)
+
         // Open database read-only
         var db: OpaquePointer?
         let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX
@@ -60,20 +63,29 @@ final class TodayTotalCalculator {
             return 0.0
         }
         defer { sqlite3_close(db) }
-        
+
         // Load events and build timeline
         do {
-            let systemEvents = try loadSystemStateEvents(db: db!, start: startTsUs, end: endTsUs)
-            let activityEvents = try loadRawActivityEvents(db: db!, start: startTsUs, end: endTsUs)
-            let editEvents = try loadUserEditEvents(db: db!, start: startTsUs, end: endTsUs)
-            
+            // Always load events up to now so we don't miss any.
+            let systemEvents = try loadSystemStateEvents(db: db!, start: startTsUs, end: nowUs)
+            let activityEvents = try loadRawActivityEvents(db: db!, start: startTsUs, end: nowUs)
+            let editEvents = try loadUserEditEvents(db: db!, start: startTsUs, end: nowUs)
+
+            // When the agent is NOT currently working (paused / idle), cap the
+            // timeline range at the last system_state_event timestamp so the
+            // timeline builder does not extend an open working interval to "now".
+            var endTsUs = nowUs
+            if !isCurrentlyWorking, let lastEvent = systemEvents.last {
+                endTsUs = lastEvent.eventTsUs
+            }
+
             let segments = buildEffectiveTimeline(
                 systemStateEvents: systemEvents,
                 rawActivityEvents: activityEvents,
                 userEditEvents: editEvents,
                 requestedRange: (startTsUs, endTsUs)
             )
-            
+
             return Aggregations.totalWorkingTime(segments: segments)
         } catch {
             return 0.0
@@ -181,17 +193,17 @@ final class TodayTotalCalculator {
         end: Int64
     ) throws -> [UserEditEvent] {
         var events: [UserEditEvent] = []
-        // Query matches user_edit_events schema from SPEC.md Section 6.4
         let sql = """
-            SELECT uee_id, created_ts_us, created_monotonic_ns,
-                   author_username, author_uid, client, client_version,
-                   op, start_ts_us, end_ts_us,
-                   tag_id, tag_name,
-                   manual_app_bundle_id, manual_app_name, manual_window_title,
-                   note, target_uee_id, payload_json
-            FROM user_edit_events
-            WHERE (start_ts_us < ? AND end_ts_us > ?) OR op = 'undo_edit'
-            ORDER BY created_ts_us;
+            SELECT u.uee_id, u.created_ts_us, u.created_monotonic_ns,
+                   u.author_username, u.author_uid, u.client, u.client_version,
+                   u.op, u.start_ts_us, u.end_ts_us,
+                   u.tag_id, t.name,
+                   u.manual_app_bundle_id, u.manual_app_name, u.manual_window_title,
+                   u.note, u.target_uee_id, u.payload_json
+            FROM user_edit_events u
+            LEFT JOIN tags t ON u.tag_id = t.tag_id
+            WHERE (u.start_ts_us < ? AND u.end_ts_us > ?) OR u.op = 'undo_edit'
+            ORDER BY u.created_ts_us;
             """
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }

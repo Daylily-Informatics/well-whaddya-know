@@ -92,6 +92,22 @@ public final class AgentService: AgentServiceProtocol, @unchecked Sendable {
         try commandHandler.exportTimeline(request)
     }
 
+    // MARK: - Tracking Control
+
+    public func pauseTracking() async throws {
+        guard let agent = agentRef else {
+            throw XPCError.agentNotRunning
+        }
+        try await agent.pauseTracking()
+    }
+
+    public func resumeTracking() async throws {
+        guard let agent = agentRef else {
+            throw XPCError.agentNotRunning
+        }
+        try await agent.resumeTracking()
+    }
+
     // MARK: - Health / Doctor
 
     public func getHealth() async throws -> HealthStatus {

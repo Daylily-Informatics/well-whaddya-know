@@ -217,6 +217,22 @@ struct ActionButtonsView: View {
 
     var body: some View {
         VStack(spacing: 8) {
+            // Tracking toggle button
+            Button {
+                Task {
+                    await viewModel.toggleTracking()
+                }
+            } label: {
+                HStack {
+                    Image(systemName: viewModel.isWorking ? "pause.circle.fill" : "play.circle.fill")
+                    Text(viewModel.isWorking ? "Stop Tracking" : "Start Tracking")
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(viewModel.isWorking ? .orange : .green)
+            .disabled(!viewModel.agentReachable)
+
             HStack(spacing: 8) {
                 Button("Open Viewer") {
                     WindowManager.shared.openViewerWindow()
@@ -250,6 +266,7 @@ final class WindowManager {
 
     func openViewerWindow(tab: ViewerTab = .timeline) {
         if let window = viewerWindow, window.isVisible {
+            NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
             return
         }
@@ -262,6 +279,7 @@ final class WindowManager {
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.setContentSize(NSSize(width: 900, height: 600))
         window.center()
+        NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
 
         self.viewerWindow = window
@@ -269,6 +287,7 @@ final class WindowManager {
 
     func openPreferencesWindow() {
         if let window = preferencesWindow, window.isVisible {
+            NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
             return
         }
@@ -278,9 +297,11 @@ final class WindowManager {
 
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Preferences"
-        window.styleMask = [.titled, .closable]
-        window.setContentSize(NSSize(width: 450, height: 350))
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.setContentSize(NSSize(width: 560, height: 520))
+        window.minSize = NSSize(width: 560, height: 520)
         window.center()
+        NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
 
         self.preferencesWindow = window

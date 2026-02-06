@@ -151,5 +151,7 @@ public enum IPCMethod {
     public static let exportTimeline = "exportTimeline"
     public static let getHealth = "getHealth"
     public static let verifyDatabase = "verifyDatabase"
+    public static let pauseTracking = "pauseTracking"
+    public static let resumeTracking = "resumeTracking"
 }
 

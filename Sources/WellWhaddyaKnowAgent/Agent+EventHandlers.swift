@@ -104,29 +104,38 @@ extension Agent {
     func handleAppActivated(bundleId: String, displayName: String, pid: pid_t, timestamp: Date, monotonicNs: UInt64) async throws {
         // Only emit activity events when working (SPEC.md 5.4)
         guard state.isWorking else { return }
-        
+
         let timestampUs = Int64(timestamp.timeIntervalSince1970 * 1_000_000)
-        
+
         // Ensure app exists in dimension table
         let appId = try eventWriter.ensureApplication(
             bundleId: bundleId,
             displayName: displayName,
             firstSeenTsUs: timestampUs
         )
-        
+
         currentAppId = appId
         currentPid = pid
         currentAppName = displayName
-        currentWindowTitle = nil // Reset title on app switch, will be updated by AX sensor
 
-        // Emit activity event
+        // Immediately capture window title via Accessibility API
+        let (titleId, titleStatus) = try captureCurrentTitle(for: pid, timestampUs: timestampUs)
+
+        // Start observing title changes for the new foreground PID
+        if let axSensor = accessibilitySensor {
+            DispatchQueue.main.async {
+                axSensor.startObserving(pid: pid)
+            }
+        }
+
+        // Emit activity event with title captured inline
         try eventWriter.insertRawActivityEvent(
             eventTsUs: timestampUs,
             eventMonotonicNs: monotonicNs,
             appId: appId,
             pid: pid,
-            titleId: nil as Int64?,  // Window title stubbed as NULL per task spec
-            titleStatus: TitleStatus.noWindow,  // No AX implementation yet
+            titleId: titleId,
+            titleStatus: titleStatus,
             reason: ActivityEventReason.appActivated,
             isWorking: true
         )
@@ -177,18 +186,60 @@ extension Agent {
         currentAppId = appId
         currentPid = appInfo.pid
         currentAppName = appInfo.displayName
-        currentWindowTitle = nil // Will be updated by AX sensor
+
+        // Immediately capture window title via Accessibility API
+        let (titleId, titleStatus) = try captureCurrentTitle(for: appInfo.pid, timestampUs: timestampUs)
+
+        // Start observing title changes for the frontmost PID
+        if let axSensor = accessibilitySensor {
+            DispatchQueue.main.async {
+                axSensor.startObserving(pid: appInfo.pid)
+            }
+        }
 
         try eventWriter.insertRawActivityEvent(
             eventTsUs: timestampUs,
             eventMonotonicNs: monotonicNs,
             appId: appId,
             pid: appInfo.pid,
-            titleId: nil as Int64?,
-            titleStatus: TitleStatus.noWindow,
+            titleId: titleId,
+            titleStatus: titleStatus,
             reason: ActivityEventReason.workingBegan,
             isWorking: true
         )
+    }
+
+    // MARK: - Title Capture Helper
+
+    /// Capture the current window title for a PID using the Accessibility API.
+    /// Returns (titleId, titleStatus). Sets `currentWindowTitle` as a side effect.
+    private func captureCurrentTitle(for pid: pid_t, timestampUs: Int64) throws -> (Int64?, TitleStatus) {
+        guard let axSensor = accessibilitySensor else {
+            currentWindowTitle = nil
+            return (nil, .noWindow)
+        }
+
+        let (title, captureStatus) = axSensor.getCurrentTitle(for: pid)
+
+        // Map TitleCaptureStatus → TitleStatus
+        let titleStatus: TitleStatus
+        switch captureStatus {
+        case .ok:           titleStatus = .ok
+        case .noPermission: titleStatus = .noPermission
+        case .notSupported: titleStatus = .notSupported
+        case .noWindow:     titleStatus = .noWindow
+        case .error:        titleStatus = .error
+        }
+
+        var titleId: Int64? = nil
+        if let title = title {
+            titleId = try eventWriter.ensureWindowTitle(title: title, firstSeenTsUs: timestampUs)
+            currentWindowTitle = title
+        } else {
+            currentWindowTitle = nil
+        }
+
+        return (titleId, titleStatus)
     }
 
     // MARK: - Title Change (SPEC.md Section 3.4)
@@ -203,6 +254,14 @@ extension Agent {
     ) async throws {
         // Only emit activity events when working (SPEC.md 5.4)
         guard state.isWorking else { return }
+
+        // Deduplicate: skip if the title matches what was already captured inline
+        // by handleAppActivated / emitInitialActivityEvent for the same PID.
+        // startObserving(pid:) resets lastKnownTitle, causing the AX observer to
+        // re-emit the same title we already stored.
+        if pid == currentPid && title == currentWindowTitle && status == .ok {
+            return
+        }
 
         let timestampUs = Int64(timestamp.timeIntervalSince1970 * 1_000_000)
 

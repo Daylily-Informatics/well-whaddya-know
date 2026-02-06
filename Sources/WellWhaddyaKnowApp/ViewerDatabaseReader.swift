@@ -39,32 +39,77 @@ final class ViewerDatabaseReader {
     
     /// Load timeline segments for a date range
     static func loadTimeline(startTsUs: Int64, endTsUs: Int64) async -> [EffectiveSegment] {
-        guard let dbPath = databasePath,
-              FileManager.default.fileExists(atPath: dbPath) else {
+        guard let dbPath = databasePath else {
+            print("[ViewerDB] ERROR: databasePath is nil")
             return []
         }
-        
+        guard FileManager.default.fileExists(atPath: dbPath) else {
+            print("[ViewerDB] ERROR: database not found at \(dbPath)")
+            return []
+        }
+        print("[ViewerDB] Loading timeline from \(dbPath)")
+        print("[ViewerDB] Range: \(startTsUs) to \(endTsUs)")
+
         var db: OpaquePointer?
         let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX
         guard sqlite3_open_v2(dbPath, &db, flags, nil) == SQLITE_OK else {
+            print("[ViewerDB] ERROR: failed to open database")
             return []
         }
         defer { sqlite3_close(db) }
-        
+
         do {
             let systemEvents = try loadSystemStateEvents(db: db!, start: startTsUs, end: endTsUs)
+            print("[ViewerDB] systemEvents: \(systemEvents.count)")
             let activityEvents = try loadRawActivityEvents(db: db!, start: startTsUs, end: endTsUs)
+            print("[ViewerDB] activityEvents: \(activityEvents.count)")
             let editEvents = try loadUserEditEvents(db: db!, start: startTsUs, end: endTsUs)
-            
-            return buildEffectiveTimeline(
+            print("[ViewerDB] editEvents: \(editEvents.count)")
+
+            let segments = buildEffectiveTimeline(
                 systemStateEvents: systemEvents,
                 rawActivityEvents: activityEvents,
                 userEditEvents: editEvents,
                 requestedRange: (startTsUs, endTsUs)
             )
+            print("[ViewerDB] effectiveSegments: \(segments.count)")
+            return segments
         } catch {
+            print("[ViewerDB] ERROR: \(error)")
             return []
         }
+    }
+
+    /// Load identity info from database for exports
+    static func loadIdentity() async -> (machineId: String, username: String, uid: Int)? {
+        guard let dbPath = databasePath,
+              FileManager.default.fileExists(atPath: dbPath) else {
+            return nil
+        }
+
+        var db: OpaquePointer?
+        let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX
+        guard sqlite3_open_v2(dbPath, &db, flags, nil) == SQLITE_OK else {
+            return nil
+        }
+        defer { sqlite3_close(db) }
+
+        let sql = "SELECT machine_id, username, uid FROM agent_runs ORDER BY start_ts_us DESC LIMIT 1;"
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            return nil
+        }
+
+        guard sqlite3_step(stmt) == SQLITE_ROW else {
+            return nil
+        }
+
+        let machineId = String(cString: sqlite3_column_text(stmt, 0))
+        let username = String(cString: sqlite3_column_text(stmt, 1))
+        let uid = Int(sqlite3_column_int(stmt, 2))
+        return (machineId: machineId, username: username, uid: uid)
     }
     
     /// Load all tags from database
@@ -82,7 +127,7 @@ final class ViewerDatabaseReader {
         defer { sqlite3_close(db) }
         
         var tags: [TagData] = []
-        let sql = "SELECT tag_id, name, created_ts_us, is_retired FROM tags ORDER BY name;"
+        let sql = "SELECT tag_id, name, created_ts_us, (retired_ts_us IS NOT NULL) as is_retired FROM tags ORDER BY name;"
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }
         
@@ -110,6 +155,31 @@ final class ViewerDatabaseReader {
         end: Int64
     ) throws -> [SystemStateEvent] {
         var events: [SystemStateEvent] = []
+
+        // First: load the most recent event BEFORE the range to establish initial state.
+        // Without this, if the agent started before the queried range and has been working
+        // since, there are no system_state_events in the range and the timeline shows empty.
+        let priorSql = """
+            SELECT sse_id, run_id, event_ts_us, event_monotonic_ns,
+                   is_system_awake, is_session_on_console, is_screen_locked, is_working,
+                   event_kind, source, tz_identifier, tz_offset_seconds, payload_json
+            FROM system_state_events
+            WHERE event_ts_us < ?
+            ORDER BY event_ts_us DESC
+            LIMIT 1;
+            """
+        var priorStmt: OpaquePointer?
+        defer { sqlite3_finalize(priorStmt) }
+
+        if sqlite3_prepare_v2(db, priorSql, -1, &priorStmt, nil) == SQLITE_OK {
+            sqlite3_bind_int64(priorStmt, 1, start)
+            if sqlite3_step(priorStmt) == SQLITE_ROW {
+                let event = parseSystemStateEvent(stmt: priorStmt!)
+                events.append(event)
+            }
+        }
+
+        // Then: load all events within the range
         let sql = """
             SELECT sse_id, run_id, event_ts_us, event_monotonic_ns,
                    is_system_awake, is_session_on_console, is_screen_locked, is_working,
@@ -120,32 +190,37 @@ final class ViewerDatabaseReader {
             """
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }
-        
+
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw NSError(domain: "ViewerDatabaseReader", code: 1)
         }
         sqlite3_bind_int64(stmt, 1, start)
         sqlite3_bind_int64(stmt, 2, end)
-        
+
         while sqlite3_step(stmt) == SQLITE_ROW {
-            let event = SystemStateEvent(
-                sseId: sqlite3_column_int64(stmt, 0),
-                runId: String(cString: sqlite3_column_text(stmt, 1)),
-                eventTsUs: sqlite3_column_int64(stmt, 2),
-                eventMonotonicNs: UInt64(sqlite3_column_int64(stmt, 3)),
-                isSystemAwake: sqlite3_column_int(stmt, 4) != 0,
-                isSessionOnConsole: sqlite3_column_int(stmt, 5) != 0,
-                isScreenLocked: sqlite3_column_int(stmt, 6) != 0,
-                isWorking: sqlite3_column_int(stmt, 7) != 0,
-                eventKind: SystemStateEventKind(rawValue: String(cString: sqlite3_column_text(stmt, 8))) ?? .stateChange,
-                source: EventSource(rawValue: String(cString: sqlite3_column_text(stmt, 9))) ?? .manual,
-                tzIdentifier: String(cString: sqlite3_column_text(stmt, 10)),
-                tzOffsetSeconds: Int(sqlite3_column_int(stmt, 11)),
-                payloadJson: sqlite3_column_text(stmt, 12).map { String(cString: $0) }
-            )
+            let event = parseSystemStateEvent(stmt: stmt!)
             events.append(event)
         }
         return events
+    }
+
+    /// Parse a system_state_events row from a prepared statement
+    private static func parseSystemStateEvent(stmt: OpaquePointer) -> SystemStateEvent {
+        SystemStateEvent(
+            sseId: sqlite3_column_int64(stmt, 0),
+            runId: String(cString: sqlite3_column_text(stmt, 1)),
+            eventTsUs: sqlite3_column_int64(stmt, 2),
+            eventMonotonicNs: UInt64(sqlite3_column_int64(stmt, 3)),
+            isSystemAwake: sqlite3_column_int(stmt, 4) != 0,
+            isSessionOnConsole: sqlite3_column_int(stmt, 5) != 0,
+            isScreenLocked: sqlite3_column_int(stmt, 6) != 0,
+            isWorking: sqlite3_column_int(stmt, 7) != 0,
+            eventKind: SystemStateEventKind(rawValue: String(cString: sqlite3_column_text(stmt, 8))) ?? .stateChange,
+            source: EventSource(rawValue: String(cString: sqlite3_column_text(stmt, 9))) ?? .manual,
+            tzIdentifier: String(cString: sqlite3_column_text(stmt, 10)),
+            tzOffsetSeconds: Int(sqlite3_column_int(stmt, 11)),
+            payloadJson: sqlite3_column_text(stmt, 12).map { String(cString: $0) }
+        )
     }
 
     private static func loadRawActivityEvents(
@@ -154,6 +229,51 @@ final class ViewerDatabaseReader {
         end: Int64
     ) throws -> [RawActivityEvent] {
         var events: [RawActivityEvent] = []
+
+        // First: load the most recent activity event BEFORE the range to establish
+        // which app/window was active when the range started. Without this, if the
+        // user was on an app before midnight and didn't switch after, "Today" shows
+        // no segment for that app.
+        let priorSql = """
+            SELECT rae.rae_id, rae.run_id, rae.event_ts_us, rae.event_monotonic_ns,
+                   rae.app_id, a.bundle_id, a.display_name, rae.pid,
+                   rae.title_id, wt.title, rae.title_status, rae.reason,
+                   rae.is_working, rae.ax_error_code, rae.payload_json
+            FROM raw_activity_events rae
+            JOIN applications a ON rae.app_id = a.app_id
+            LEFT JOIN window_titles wt ON rae.title_id = wt.title_id
+            WHERE rae.event_ts_us < ?
+            ORDER BY rae.event_ts_us DESC
+            LIMIT 1;
+            """
+        var priorStmt: OpaquePointer?
+        defer { sqlite3_finalize(priorStmt) }
+
+        if sqlite3_prepare_v2(db, priorSql, -1, &priorStmt, nil) == SQLITE_OK {
+            sqlite3_bind_int64(priorStmt, 1, start)
+            if sqlite3_step(priorStmt) == SQLITE_ROW {
+                let event = RawActivityEvent(
+                    raeId: sqlite3_column_int64(priorStmt, 0),
+                    runId: String(cString: sqlite3_column_text(priorStmt, 1)),
+                    eventTsUs: sqlite3_column_int64(priorStmt, 2),
+                    eventMonotonicNs: UInt64(sqlite3_column_int64(priorStmt, 3)),
+                    appId: sqlite3_column_int64(priorStmt, 4),
+                    appBundleId: String(cString: sqlite3_column_text(priorStmt, 5)),
+                    appDisplayName: String(cString: sqlite3_column_text(priorStmt, 6)),
+                    pid: Int32(sqlite3_column_int(priorStmt, 7)),
+                    titleId: sqlite3_column_type(priorStmt, 8) != SQLITE_NULL ? sqlite3_column_int64(priorStmt, 8) : nil,
+                    windowTitle: sqlite3_column_type(priorStmt, 9) != SQLITE_NULL ? String(cString: sqlite3_column_text(priorStmt, 9)) : nil,
+                    titleStatus: TitleStatus(rawValue: String(cString: sqlite3_column_text(priorStmt, 10))) ?? .error,
+                    reason: ActivityEventReason(rawValue: String(cString: sqlite3_column_text(priorStmt, 11))) ?? .appActivated,
+                    isWorking: sqlite3_column_int(priorStmt, 12) != 0,
+                    axErrorCode: sqlite3_column_type(priorStmt, 13) != SQLITE_NULL ? Int32(sqlite3_column_int(priorStmt, 13)) : nil,
+                    payloadJson: sqlite3_column_type(priorStmt, 14) != SQLITE_NULL ? String(cString: sqlite3_column_text(priorStmt, 14)) : nil
+                )
+                events.append(event)
+            }
+        }
+
+        // Then: load all events within the range
         let sql = """
             SELECT rae.rae_id, rae.run_id, rae.event_ts_us, rae.event_monotonic_ns,
                    rae.app_id, a.bundle_id, a.display_name, rae.pid,
@@ -204,15 +324,16 @@ final class ViewerDatabaseReader {
     ) throws -> [UserEditEvent] {
         var events: [UserEditEvent] = []
         let sql = """
-            SELECT uee_id, created_ts_us, created_monotonic_ns,
-                   author_username, author_uid, client, client_version,
-                   op, start_ts_us, end_ts_us,
-                   tag_id, tag_name,
-                   manual_app_bundle_id, manual_app_name, manual_window_title,
-                   note, target_uee_id, payload_json
-            FROM user_edit_events
-            WHERE (start_ts_us < ? AND end_ts_us > ?) OR op = 'undo_edit'
-            ORDER BY created_ts_us;
+            SELECT u.uee_id, u.created_ts_us, u.created_monotonic_ns,
+                   u.author_username, u.author_uid, u.client, u.client_version,
+                   u.op, u.start_ts_us, u.end_ts_us,
+                   u.tag_id, t.name,
+                   u.manual_app_bundle_id, u.manual_app_name, u.manual_window_title,
+                   u.note, u.target_uee_id, u.payload_json
+            FROM user_edit_events u
+            LEFT JOIN tags t ON u.tag_id = t.tag_id
+            WHERE (u.start_ts_us < ? AND u.end_ts_us > ?) OR u.op = 'undo_edit'
+            ORDER BY u.created_ts_us;
             """
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }

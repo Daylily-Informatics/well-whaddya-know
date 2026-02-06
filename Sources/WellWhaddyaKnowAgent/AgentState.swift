@@ -6,29 +6,34 @@ import Foundation
 /// The agent's state machine tracking system state.
 /// Per SPEC.md Section 4.1-4.2.
 public struct AgentState: Sendable, Equatable {
-    
+
     /// True when system is not asleep. Set false on willSleep, true on didWake.
     public var isSystemAwake: Bool
-    
+
     /// True when this session owns the console (not fast-user-switched out).
     /// Derived from CGSessionCopyCurrentDictionary kCGSessionOnConsoleKey.
     public var isSessionOnConsole: Bool
-    
+
     /// True when screen is locked.
     /// Derived from CGSessionCopyCurrentDictionary CGSSessionScreenIsLocked.
     public var isScreenLocked: Bool
-    
-    /// The derived working state per SPEC.md Section 4.2:
-    /// isWorking = isSystemAwake && isSessionOnConsole && !isScreenLocked
+
+    /// True when user has manually paused tracking via UI/CLI.
+    /// Resets to false on agent restart.
+    public var isPausedByUser: Bool
+
+    /// The derived working state per SPEC.md Section 4.2 (extended with manual pause):
+    /// isWorking = !isPausedByUser && isSystemAwake && isSessionOnConsole && !isScreenLocked
     public var isWorking: Bool {
-        isSystemAwake && isSessionOnConsole && !isScreenLocked
+        !isPausedByUser && isSystemAwake && isSessionOnConsole && !isScreenLocked
     }
-    
+
     /// Create a new agent state
-    public init(isSystemAwake: Bool, isSessionOnConsole: Bool, isScreenLocked: Bool) {
+    public init(isSystemAwake: Bool, isSessionOnConsole: Bool, isScreenLocked: Bool, isPausedByUser: Bool = false) {
         self.isSystemAwake = isSystemAwake
         self.isSessionOnConsole = isSessionOnConsole
         self.isScreenLocked = isScreenLocked
+        self.isPausedByUser = isPausedByUser
     }
     
     /// Conservative initial state: assume not working until we probe

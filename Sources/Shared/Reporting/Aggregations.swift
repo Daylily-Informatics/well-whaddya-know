@@ -95,6 +95,38 @@ public enum Aggregations {
         return result
     }
 
+    // MARK: - Totals by App Name
+
+    /// Calculate totals grouped by application display name (observed only)
+    /// - Parameter segments: The effective segments to aggregate
+    /// - Returns: Dictionary keyed by app name, values are total seconds
+    public static func totalsByAppName(segments: [EffectiveSegment]) -> [String: Double] {
+        var result: [String: Double] = [:]
+        for segment in segments where segment.coverage == .observed {
+            let key = segment.appName.isEmpty ? "(unknown)" : segment.appName
+            result[key, default: 0.0] += segment.durationSeconds
+        }
+        return result
+    }
+
+    // MARK: - Totals by App Name + Window Title
+
+    /// Aggregate observed time by (appName, windowTitle) pair, sorted descending by seconds
+    public static func totalsByAppNameAndWindow(
+        segments: [EffectiveSegment]
+    ) -> [(appName: String, windowTitle: String, seconds: Double)] {
+        struct Key: Hashable { let app: String; let title: String }
+        var map: [Key: Double] = [:]
+        for segment in segments where segment.coverage == .observed {
+            let app = segment.appName.isEmpty ? "(unknown)" : segment.appName
+            let title = segment.windowTitle ?? "(no title)"
+            map[Key(app: app, title: title), default: 0.0] += segment.durationSeconds
+        }
+        return map
+            .map { (appName: $0.key.app, windowTitle: $0.key.title, seconds: $0.value) }
+            .sorted { $0.seconds > $1.seconds }
+    }
+
     // MARK: - Unobserved Gap Totals
 
     /// Calculate total unobserved gap time

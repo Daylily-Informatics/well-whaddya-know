@@ -92,10 +92,21 @@ final class XPCClient: Sendable {
         try await ipcClient.exportTimeline(request)
     }
 
+    /// Pause tracking (user-initiated)
+    func pauseTracking() async throws {
+        try await ipcClient.pauseTracking()
+    }
+
+    /// Resume tracking after manual pause
+    func resumeTracking() async throws {
+        try await ipcClient.resumeTracking()
+    }
+
     /// Get today's total working seconds.
     /// Uses direct read-only database access (doesn't require agent).
+    /// - Parameter isCurrentlyWorking: Whether the agent is actively tracking right now.
     /// - Returns: Total working seconds for today
-    func getTodayTotalSeconds() async -> Double {
-        await TodayTotalCalculator.calculateTodayTotal()
+    func getTodayTotalSeconds(isCurrentlyWorking: Bool) async -> Double {
+        await TodayTotalCalculator.calculateTodayTotal(isCurrentlyWorking: isCurrentlyWorking)
     }
 }

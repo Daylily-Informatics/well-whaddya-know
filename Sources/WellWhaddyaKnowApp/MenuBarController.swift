@@ -5,6 +5,9 @@ import AppKit
 import SwiftUI
 import XPCProtocol
 import SQLite3
+import os.log
+
+private let wwkLog = Logger(subsystem: "com.daylily.wellwhaddyaknow", category: "GUI")
 
 /// Manages the menu bar status item and popover display.
 /// This is the main controller for the menu bar UI.
@@ -14,6 +17,18 @@ final class MenuBarController: NSObject {
     private var popover: NSPopover?
     private let xpcClient: XPCClient
     private let viewModel: StatusViewModel
+    private var isBlinking = false
+    /// The base icon name reflecting current working state (restored after blinks)
+    private var baseIconName: String = "eye.slash.fill"
+    /// The current icon tint color
+    private var currentIconColor: NSColor = .magenta
+    private var stateObserverTask: Task<Void, Never>?
+    private var workspaceObserver: NSObjectProtocol?
+
+    // MARK: - Icon Color Palette
+    private static let workingColor    = NSColor.systemGreen
+    private static let pausedColor     = NSColor.systemRed
+    private static let unreachableColor = NSColor.magenta
 
     override init() {
         self.xpcClient = XPCClient()
@@ -22,16 +37,103 @@ final class MenuBarController: NSObject {
         setupStatusItem()
         setupPopover()
         startPolling()
+        startStateObserver()
+        startWorkspaceObserver()
     }
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem?.button {
-            // Use "knowing eye" SF Symbol — fits the snarky, all-seeing "WellWhaddyaKnow" theme
-            button.image = NSImage(systemSymbolName: "eye.fill", accessibilityDescription: "WellWhaddyaKnow")
+            // Start with closed eye (not yet confirmed working)
+            button.image = Self.makeIcon(symbolName: baseIconName, color: currentIconColor)
             button.action = #selector(togglePopover)
             button.target = self
+        }
+    }
+
+    /// Create a tinted SF Symbol image for the menu bar.
+    private static func makeIcon(symbolName: String, color: NSColor) -> NSImage? {
+        guard let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "WellWhaddyaKnow") else { return nil }
+        let config = NSImage.SymbolConfiguration(paletteColors: [color])
+        return image.withSymbolConfiguration(config)
+    }
+
+    /// Observe viewModel state changes and update the menu bar icon accordingly.
+    private func startStateObserver() {
+        stateObserverTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s poll
+                guard !Task.isCancelled, let self = self else { break }
+                self.updateIconForWorkingState(
+                    isWorking: self.viewModel.isWorking,
+                    agentReachable: self.viewModel.agentReachable
+                )
+            }
+        }
+    }
+
+    /// Update the base icon to reflect working state with tint color.
+    /// - eye.fill  (green)   when connected & working
+    /// - eye.fill  (red)     when connected & not working (paused / idle)
+    /// - eye.slash.fill (magenta) when agent unreachable
+    private func updateIconForWorkingState(isWorking: Bool, agentReachable: Bool) {
+        let newIcon: String
+        let newColor: NSColor
+        if !agentReachable {
+            newIcon = "eye.slash.fill"
+            newColor = Self.unreachableColor
+        } else if isWorking {
+            newIcon = "eye.fill"
+            newColor = Self.workingColor
+        } else {
+            newIcon = "eye.fill"
+            newColor = Self.pausedColor
+        }
+        guard newIcon != baseIconName || newColor != currentIconColor else { return }
+        baseIconName = newIcon
+        currentIconColor = newColor
+        // Only update the displayed icon if not mid-blink
+        if !isBlinking, let button = statusItem?.button {
+            button.image = Self.makeIcon(symbolName: baseIconName, color: currentIconColor)
+        }
+    }
+
+    // MARK: - Workspace Focus Observer
+
+    /// Subscribe to foreground-app changes and trigger a single blink on each switch.
+    private func startWorkspaceObserver() {
+        workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.performSingleBlink()
+            }
+        }
+    }
+
+    private func stopWorkspaceObserver() {
+        if let obs = workspaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(obs)
+            workspaceObserver = nil
+        }
+    }
+
+    // MARK: - Eye Blink Animation
+
+    /// Single blink: grays out the current icon briefly then restores (~400ms).
+    /// Triggered ONLY by: (1) active window change, (2) popover open.
+    private func performSingleBlink() {
+        guard !isBlinking, let button = statusItem?.button else { return }
+        isBlinking = true
+        button.image = Self.makeIcon(symbolName: baseIconName, color: .systemGray)
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 400_000_000) // 400ms grayed
+            guard !Task.isCancelled, let self = self else { return }
+            button.image = Self.makeIcon(symbolName: self.baseIconName, color: self.currentIconColor)
+            self.isBlinking = false
         }
     }
 
@@ -52,6 +154,7 @@ final class MenuBarController: NSObject {
             popover.performClose(nil)
         } else {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            performSingleBlink()
             // Refresh status when popover opens
             Task {
                 await viewModel.refreshStatus()
@@ -65,6 +168,9 @@ final class MenuBarController: NSObject {
 
     func stopPolling() {
         viewModel.stopPolling()
+        stopWorkspaceObserver()
+        stateObserverTask?.cancel()
+        stateObserverTask = nil
     }
 }
 
@@ -110,12 +216,6 @@ final class StatusViewModel: ObservableObject {
     }
 
     func refreshStatus() async {
-        // Always try to calculate today's total from database (doesn't require agent)
-        self.todayTotalSeconds = await xpcClient.getTodayTotalSeconds()
-
-        // Load recent activity from database (doesn't require agent)
-        self.recentActivity = Self.loadRecentActivity()
-
         // Check agent lifecycle status for specific error messaging
         let lifecycle = AgentLifecycleManager.shared
         lifecycle.refreshStatus()
@@ -123,9 +223,16 @@ final class StatusViewModel: ObservableObject {
         let socketPath = getIPCSocketPath()
         let socketExists = FileManager.default.fileExists(atPath: socketPath)
 
+        // Determine current working state from agent first so we can
+        // pass it to the today-total calculator (avoids counting up to
+        // "now" when tracking is paused).
         do {
             let status = try await xpcClient.getStatus()
+            let oldIsWorking = self.isWorking
             self.isWorking = status.isWorking
+            if oldIsWorking != status.isWorking {
+                wwkLog.info("refreshStatus: isWorking changed \(oldIsWorking) → \(status.isWorking)")
+            }
             self.currentApp = status.currentApp
             self.currentTitle = status.currentTitle
             self.accessibilityStatus = AccessibilityDisplayStatus(from: status.accessibilityStatus as AccessibilityStatus)
@@ -141,7 +248,6 @@ final class StatusViewModel: ObservableObject {
             self.isWorking = false
             self.currentApp = nil
             self.currentTitle = nil
-            // Keep todayTotalSeconds - it was calculated from database
 
             // Determine specific error reason
             if !lifecycle.isRegistered {
@@ -154,6 +260,49 @@ final class StatusViewModel: ObservableObject {
                 self.errorMessage = "Agent not running (click to start)"
             }
         }
+
+        // Calculate today's total from database (read-only, doesn't require agent).
+        // Uses the just-determined isWorking so the timer stops when paused.
+        self.todayTotalSeconds = await xpcClient.getTodayTotalSeconds(isCurrentlyWorking: self.isWorking)
+
+        // Load recent activity from database (doesn't require agent)
+        self.recentActivity = Self.loadRecentActivity()
+    }
+
+    /// Toggle tracking: pause if working, resume if paused.
+    func toggleTracking() async {
+        let wasWorking = isWorking
+        wwkLog.info("toggleTracking() called, isWorking=\(self.isWorking), agentReachable=\(self.agentReachable)")
+
+        // Pause polling so a concurrent refreshStatus() can't read stale state.
+        stopPolling()
+
+        do {
+            if isWorking {
+                wwkLog.info("Calling pauseTracking()...")
+                try await xpcClient.pauseTracking()
+                wwkLog.info("pauseTracking() succeeded")
+            } else {
+                wwkLog.info("Calling resumeTracking()...")
+                try await xpcClient.resumeTracking()
+                wwkLog.info("resumeTracking() succeeded")
+            }
+            // Small delay so the agent commits the state_change event before
+            // we query it.
+            try? await Task.sleep(nanoseconds: 150_000_000) // 150 ms
+        } catch {
+            wwkLog.error("toggleTracking() CAUGHT ERROR: \(error.localizedDescription)")
+            errorMessage = "Failed to toggle tracking: \(error.localizedDescription)"
+        }
+
+        // ALWAYS refresh, even if the IPC call threw — ensures UI reflects
+        // actual agent state rather than going stale.
+        wwkLog.info("Calling refreshStatus() after toggle...")
+        await refreshStatus()
+        wwkLog.info("refreshStatus() done. isWorking=\(self.isWorking) (was \(wasWorking))")
+
+        // Resume polling.
+        startPolling()
     }
 
     func openSystemSettings() {
@@ -278,4 +427,6 @@ enum AccessibilityDisplayStatus: Sendable {
         }
     }
 }
+
+
 

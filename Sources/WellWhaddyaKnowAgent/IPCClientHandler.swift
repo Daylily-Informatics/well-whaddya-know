@@ -126,7 +126,15 @@ final class ClientHandler: @unchecked Sendable {
         case IPCMethod.verifyDatabase:
             try await service.verifyDatabase()
             return try encoder.encode(["success": true])
-            
+
+        case IPCMethod.pauseTracking:
+            try await service.pauseTracking()
+            return try encoder.encode(["success": true])
+
+        case IPCMethod.resumeTracking:
+            try await service.resumeTracking()
+            return try encoder.encode(["success": true])
+
         default:
             throw IPCClientError.serverError(code: IPCErrorCode.methodNotFound, message: "Unknown method: \(request.method)")
         }
