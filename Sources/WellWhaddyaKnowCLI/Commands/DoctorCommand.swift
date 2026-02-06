@@ -3,6 +3,7 @@
 
 import ArgumentParser
 import Foundation
+import XPCProtocol
 
 /// Doctor command - check system health
 struct Doctor: AsyncParsableCommand {
@@ -44,16 +45,45 @@ struct Doctor: AsyncParsableCommand {
         }
         checks.append(dbCheck)
 
-        // Check 2: Agent running (we can't easily check this without XPC)
+        // Check 2: Agent running via IPC socket
         var agentCheck: [String: Any] = ["check": "agent"]
-        agentCheck["status"] = "unknown"
-        agentCheck["message"] = "Agent status check requires XPC connection (not implemented in CLI yet)"
-        checks.append(agentCheck)
-
-        // Check 3: Accessibility permissions
         var axCheck: [String: Any] = ["check": "accessibility"]
-        axCheck["status"] = "unknown"
-        axCheck["message"] = "Accessibility check requires agent query"
+
+        let ipcClient = CLIIPCClient()
+        if !ipcClient.isAgentAvailable {
+            agentCheck["status"] = "warning"
+            agentCheck["message"] = "Agent not running (socket not found)"
+            allPassed = false
+            axCheck["status"] = "unknown"
+            axCheck["message"] = "Cannot check accessibility — agent not running"
+        } else {
+            do {
+                let status = try await ipcClient.getStatus()
+                agentCheck["status"] = "ok"
+                agentCheck["message"] = "Agent is running (v\(status.agentVersion), uptime \(Int(status.agentUptime))s)"
+
+                // Check 3: Accessibility permissions from agent status
+                switch status.accessibilityStatus {
+                case .granted:
+                    axCheck["status"] = "ok"
+                    axCheck["message"] = "Accessibility permission granted"
+                case .denied:
+                    axCheck["status"] = "warning"
+                    axCheck["message"] = "Accessibility permission denied — window titles will not be captured"
+                    allPassed = false
+                case .unknown:
+                    axCheck["status"] = "unknown"
+                    axCheck["message"] = "Accessibility permission status unknown"
+                }
+            } catch {
+                agentCheck["status"] = "warning"
+                agentCheck["message"] = "Agent not responding (\(error.localizedDescription))"
+                allPassed = false
+                axCheck["status"] = "unknown"
+                axCheck["message"] = "Cannot check accessibility — agent not responding"
+            }
+        }
+        checks.append(agentCheck)
         checks.append(axCheck)
 
         // Output results

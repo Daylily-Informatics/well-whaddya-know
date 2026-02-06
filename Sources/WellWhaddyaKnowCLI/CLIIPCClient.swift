@@ -16,7 +16,20 @@ struct CLIIPCClient {
     var isAgentAvailable: Bool {
         ipcClient.isAgentAvailable
     }
-    
+
+    /// Get agent status (for doctor/health checks)
+    func getStatus() async throws -> StatusResponse {
+        guard isAgentAvailable else {
+            throw CLIError.agentNotRunning
+        }
+
+        do {
+            return try await ipcClient.getStatus()
+        } catch let error as IPCClientError {
+            throw mapIPCError(error)
+        }
+    }
+
     /// Delete a time range - returns the user_edit_event id
     func deleteRange(from: Int64, to: Int64, note: String?) async throws -> Int64 {
         guard isAgentAvailable else {
