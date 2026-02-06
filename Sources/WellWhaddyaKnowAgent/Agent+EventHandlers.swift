@@ -116,7 +116,9 @@ extension Agent {
         
         currentAppId = appId
         currentPid = pid
-        
+        currentAppName = displayName
+        currentWindowTitle = nil // Reset title on app switch, will be updated by AX sensor
+
         // Emit activity event
         try eventWriter.insertRawActivityEvent(
             eventTsUs: timestampUs,
@@ -174,6 +176,8 @@ extension Agent {
 
         currentAppId = appId
         currentPid = appInfo.pid
+        currentAppName = appInfo.displayName
+        currentWindowTitle = nil // Will be updated by AX sensor
 
         try eventWriter.insertRawActivityEvent(
             eventTsUs: timestampUs,
@@ -224,6 +228,9 @@ extension Agent {
         var titleId: Int64?
         if let title = title {
             titleId = try eventWriter.ensureWindowTitle(title: title, firstSeenTsUs: timestampUs)
+            currentWindowTitle = title // Track for IPC status
+        } else {
+            currentWindowTitle = nil
         }
 
         // Determine reason based on source

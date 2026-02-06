@@ -3,10 +3,14 @@
 
 import Foundation
 import AppKit
+import XPCProtocol
 
 /// Global agent reference to keep alive across the async/sync boundary
 /// MainActor-isolated for Swift 6 concurrency safety
 @MainActor private var agentRef: Agent?
+
+/// IPC server reference to keep alive
+@MainActor private var ipcServerRef: IPCServer?
 
 /// Signal sources kept alive (stored to prevent deallocation)
 /// MainActor-isolated since they're accessed from main queue handlers
@@ -49,6 +53,7 @@ private func setupSignalHandlers() {
     sigterm.setEventHandler {
         print("wwkd: Received SIGTERM, shutting down...")
         Task { @MainActor in
+            ipcServerRef?.stop()
             try? await agentRef?.stop()
             Foundation.exit(0)
         }
@@ -62,6 +67,7 @@ private func setupSignalHandlers() {
     sigint.setEventHandler {
         print("wwkd: Received SIGINT, shutting down...")
         Task { @MainActor in
+            ipcServerRef?.stop()
             try? await agentRef?.stop()
             Foundation.exit(0)
         }
@@ -102,6 +108,18 @@ struct WWKDMain {
         // Start the agent
         try await agent.start()
         print("wwkd: Agent started successfully")
+
+        // Start IPC server for inter-process communication
+        let service = await agent.createService()
+        let socketPath = getIPCSocketPath()
+        let ipcServer = IPCServer(socketPath: socketPath, service: service)
+        do {
+            try ipcServer.start()
+            ipcServerRef = ipcServer
+        } catch {
+            print("wwkd: Warning - IPC server failed to start: \(error)")
+            // Continue running even if IPC fails - CLI can still use direct DB reads
+        }
 
         // Keep the process alive forever.
         // The Swift async main will keep running until we exit.

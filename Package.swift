@@ -132,6 +132,10 @@ let package = Package(
                 "Reporting",
             ],
             path: "Sources/WellWhaddyaKnowApp",
+            exclude: [
+                "Info.plist",
+                "WellWhaddyaKnow.entitlements",
+            ],
             swiftSettings: [
                 .unsafeFlags(["-parse-as-library"])
             ]

@@ -2,6 +2,7 @@
 // PreferencesWindow.swift - Preferences window per SPEC.md Section 9.3
 
 import SwiftUI
+import XPCProtocol
 
 /// Preferences window showing data location, permissions, and settings
 struct PreferencesWindow: View {
@@ -29,7 +30,7 @@ struct PreferencesWindow: View {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 450, height: 300)
+        .frame(width: 500, height: 420)
         .task {
             await viewModel.refreshStatus()
         }
@@ -43,10 +44,19 @@ final class PreferencesViewModel: ObservableObject {
     @Published var dataSize: String = "Unknown"
     @Published var accessibilityGranted: Bool = false
     @Published var agentRunning: Bool = false
+    @Published var agentVersion: String = ""
+    @Published var agentUptime: TimeInterval = 0
+    @Published var agentStatusMessage: String = "Checking..."
     @Published var defaultExportFormat: String = "csv"
     @Published var defaultIncludeTitles: Bool = true
+    @Published var isRefreshing: Bool = false
+
+    private let xpcClient = XPCClient()
 
     func refreshStatus() async {
+        isRefreshing = true
+        defer { isRefreshing = false }
+
         // Get data path
         let appGroupId = "group.com.daylily.wellwhaddyaknow"
         if let containerURL = FileManager.default.containerURL(
@@ -64,12 +74,27 @@ final class PreferencesViewModel: ObservableObject {
             }
         }
 
-        // Check accessibility - this is a simplified check
-        // Real implementation would query via agent
-        accessibilityGranted = false
+        // Query agent via IPC for real status
+        do {
+            let status = try await xpcClient.getStatus()
+            agentRunning = true
+            agentVersion = status.agentVersion
+            agentUptime = status.agentUptime
+            agentStatusMessage = "Running (v\(status.agentVersion), uptime \(formatUptime(status.agentUptime)))"
 
-        // Check agent status - simplified
-        agentRunning = false
+            switch status.accessibilityStatus {
+            case .granted:
+                accessibilityGranted = true
+            case .denied, .unknown:
+                accessibilityGranted = false
+            }
+        } catch {
+            agentRunning = false
+            agentVersion = ""
+            agentUptime = 0
+            agentStatusMessage = "Not running"
+            accessibilityGranted = false
+        }
     }
 
     func revealInFinder() {
@@ -83,6 +108,98 @@ final class PreferencesViewModel: ObservableObject {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    func requestAccessibilityPermission() {
+        // Trigger the system prompt via AXIsProcessTrustedWithOptions
+        let promptKey = "AXTrustedCheckOptionPrompt" as CFString
+        let options = [promptKey: true] as CFDictionary
+        let granted = AXIsProcessTrustedWithOptions(options)
+        accessibilityGranted = granted
+    }
+
+    func startAgent() {
+        // Launch wwkd from the same bundle location
+        let agentPath: String
+        if let bundlePath = Bundle.main.executablePath {
+            let bundleDir = (bundlePath as NSString).deletingLastPathComponent
+            agentPath = (bundleDir as NSString).appendingPathComponent("wwkd")
+        } else {
+            agentPath = "/usr/local/bin/wwkd"
+        }
+
+        // Check common locations
+        let candidates = [
+            agentPath,
+            ProcessInfo.processInfo.environment["HOME"].map { "\($0)/projects/daylily/well-whaddya-know/.build/debug/wwkd" } ?? "",
+            "/usr/local/bin/wwkd",
+        ]
+
+        for path in candidates where FileManager.default.isExecutableFile(atPath: path) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: path)
+            process.arguments = []
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try? process.run()
+            agentStatusMessage = "Starting..."
+            // Refresh after a short delay
+            Task {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                await refreshStatus()
+            }
+            return
+        }
+        agentStatusMessage = "Cannot find wwkd binary"
+    }
+
+    func stopAgent() {
+        // Send SIGTERM to wwkd
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        task.arguments = ["-TERM", "-f", "wwkd"]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        try? task.run()
+        task.waitUntilExit()
+        agentStatusMessage = "Stopping..."
+        Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await refreshStatus()
+        }
+    }
+
+    func restartAgent() {
+        stopAgent()
+        Task {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            startAgent()
+        }
+    }
+
+    func openAgentLogs() {
+        // Open Console.app filtered to wwkd
+        let script = """
+        tell application "Console"
+            activate
+        end tell
+        """
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+        }
+    }
+
+    private func formatUptime(_ seconds: TimeInterval) -> String {
+        let hours = Int(seconds) / 3600
+        let minutes = (Int(seconds) % 3600) / 60
+        let secs = Int(seconds) % 60
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        } else if minutes > 0 {
+            return "\(minutes)m \(secs)s"
+        }
+        return "\(secs)s"
     }
 }
 
@@ -119,28 +236,79 @@ struct PermissionsPreferencesView: View {
                 HStack {
                     Image(systemName: viewModel.accessibilityGranted ? "checkmark.circle.fill" : "xmark.circle.fill")
                         .foregroundColor(viewModel.accessibilityGranted ? .green : .red)
-                    Text(viewModel.accessibilityGranted ? "Granted" : "Not granted")
+                    Text(viewModel.accessibilityGranted ? "Permission granted ✓" : "Permission not granted")
+                        .fontWeight(.medium)
                     Spacer()
-                    Button("Open Settings") {
-                        viewModel.openAccessibilitySettings()
+                    if viewModel.isRefreshing {
+                        ProgressView()
+                            .controlSize(.small)
                     }
                 }
 
-                Text("Accessibility permission is required to capture window titles.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                if !viewModel.accessibilityGranted {
+                    Text("Window title capture requires Accessibility permission. Click \"Request Permission\" to trigger the system prompt, or open System Settings and add this app manually.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("Accessibility permission is active. Window titles are being captured.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                HStack(spacing: 8) {
+                    Button("Request Permission") {
+                        viewModel.requestAccessibilityPermission()
+                    }
+                    .disabled(viewModel.accessibilityGranted)
+
+                    Button("Open Settings") {
+                        viewModel.openAccessibilitySettings()
+                    }
+
+                    Button {
+                        Task { await viewModel.refreshStatus() }
+                    } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                }
             }
 
             Section("Background Agent") {
                 HStack {
                     Image(systemName: viewModel.agentRunning ? "checkmark.circle.fill" : "xmark.circle.fill")
                         .foregroundColor(viewModel.agentRunning ? .green : .orange)
-                    Text(viewModel.agentRunning ? "Running" : "Not running")
+                    Text(viewModel.agentStatusMessage)
+                        .fontWeight(.medium)
                 }
 
                 Text("The background agent (wwkd) must be running to track time.")
                     .font(.caption)
                     .foregroundColor(.secondary)
+
+                HStack(spacing: 8) {
+                    Button("Start") {
+                        viewModel.startAgent()
+                    }
+                    .disabled(viewModel.agentRunning)
+
+                    Button("Stop") {
+                        viewModel.stopAgent()
+                    }
+                    .disabled(!viewModel.agentRunning)
+
+                    Button("Restart") {
+                        viewModel.restartAgent()
+                    }
+                    .disabled(!viewModel.agentRunning)
+
+                    Spacer()
+
+                    Button {
+                        viewModel.openAgentLogs()
+                    } label: {
+                        Label("View Logs", systemImage: "doc.text.magnifyingglass")
+                    }
+                }
             }
         }
         .formStyle(.grouped)
@@ -225,13 +393,10 @@ struct AboutPreferencesView: View {
             }
             .font(.caption)
 
-            Spacer()
-
             Text("© 2024 Daylily Informatics. MIT License.")
                 .font(.caption2)
                 .foregroundColor(.secondary)
         }
         .padding()
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

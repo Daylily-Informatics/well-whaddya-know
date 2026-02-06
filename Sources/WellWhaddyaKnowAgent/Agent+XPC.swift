@@ -14,23 +14,34 @@ public final class AgentService: AgentServiceProtocol, @unchecked Sendable {
 
     private let commandHandler: XPCCommandHandler
     private let stateProvider: @Sendable () -> (isWorking: Bool, currentApp: String?, currentTitle: String?, axStatus: AccessibilityStatus)
+    private let agentRef: Agent?
 
     /// Initialize the service with command handler and state provider
     /// - Parameters:
     ///   - commandHandler: The XPC command handler for processing requests
-    ///   - stateProvider: A closure that returns the current agent state
+    ///   - stateProvider: A fallback closure for sync state access
+    ///   - agentRef: Optional reference to Agent for async state queries
     public init(
         commandHandler: XPCCommandHandler,
-        stateProvider: @escaping @Sendable () -> (isWorking: Bool, currentApp: String?, currentTitle: String?, axStatus: AccessibilityStatus)
+        stateProvider: @escaping @Sendable () -> (isWorking: Bool, currentApp: String?, currentTitle: String?, axStatus: AccessibilityStatus),
+        agentRef: Agent? = nil
     ) {
         self.commandHandler = commandHandler
         self.stateProvider = stateProvider
+        self.agentRef = agentRef
     }
 
     // MARK: - Status API
 
     public func getStatus() async throws -> StatusResponse {
-        let state = stateProvider()
+        // Query the agent actor directly for current state (async-safe)
+        let state: (isWorking: Bool, currentApp: String?, currentTitle: String?, axStatus: AccessibilityStatus)
+        if let agent = agentRef {
+            state = await agent.getCurrentState()
+        } else {
+            state = stateProvider()
+        }
+
         return commandHandler.getStatus(
             isWorking: state.isWorking,
             currentApp: state.currentApp,
@@ -96,25 +107,25 @@ public final class AgentService: AgentServiceProtocol, @unchecked Sendable {
 
 extension Agent {
 
-    /// Create an AgentService backed by this agent's database connection
+    /// Create an AgentService backed by this agent's database connection and state
     /// - Returns: An AgentService that implements AgentServiceProtocol
     public func createService() -> AgentService {
+        // Create handler with the database connection
         let handler = XPCCommandHandler(
             connection: connection,
             runId: runId
         )
 
+        // Create a reference to self for the state provider closure
+        let agentRef = self
+
         return AgentService(
             commandHandler: handler,
-            stateProvider: { [weak self] in
-                // Return current state - placeholder for now
-                // In production, this would synchronize with the actor
-                guard self != nil else {
-                    return (false, nil, nil, .unknown)
-                }
-                // Note: Actual state would be provided by the actor
+            stateProvider: {
+                // Fallback for sync context - actual state is queried via agent actor
                 return (false, nil, nil, .unknown)
-            }
+            },
+            agentRef: agentRef
         )
     }
 }

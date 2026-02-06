@@ -4,6 +4,7 @@
 import Foundation
 import Storage
 import Sensors
+import XPCProtocol
 
 /// Errors that can occur in the Agent
 public enum AgentError: Error {
@@ -32,9 +33,14 @@ public actor Agent: SensorEventHandler {
     var sleepWakeSensor: SleepWakeSensor?
     var foregroundAppSensor: ForegroundAppSensor?
 
-    // Track current foreground app for activity events
+    // Track current foreground app for activity events and XPC status
     var currentAppId: Int64?
     var currentPid: pid_t = 0
+    var currentAppName: String?
+    var currentWindowTitle: String?
+
+    // Accessibility sensor for title capture (created in configureSensors)
+    var accessibilitySensor: AccessibilitySensor?
 
     // Track last event timestamps for clock change detection (SPEC.md 5.5.F)
     var lastEventTsUs: Int64 = 0
@@ -72,6 +78,7 @@ public actor Agent: SensorEventHandler {
         self.sessionSensor = SessionStateSensor(handler: self)
         self.sleepWakeSensor = SleepWakeSensor(handler: self)
         self.foregroundAppSensor = ForegroundAppSensor(handler: self)
+        self.accessibilitySensor = AccessibilitySensor(handler: self)
     }
     
     // MARK: - Lifecycle (SPEC.md Section 5.2)
@@ -196,5 +203,20 @@ public actor Agent: SensorEventHandler {
             // Log error but don't crash the agent
             print("Error handling sensor event: \(error)")
         }
+    }
+
+    // MARK: - State Accessors for IPC
+
+    /// Get the current agent state for IPC status queries
+    public func getCurrentState() -> (isWorking: Bool, currentApp: String?, currentTitle: String?, axStatus: AccessibilityStatus) {
+        let axGranted = accessibilitySensor?.isAccessibilityGranted() ?? false
+        let axStatus: AccessibilityStatus = axGranted ? .granted : .denied
+
+        return (
+            isWorking: state.isWorking,
+            currentApp: currentAppName,
+            currentTitle: currentWindowTitle,
+            axStatus: axStatus
+        )
     }
 }

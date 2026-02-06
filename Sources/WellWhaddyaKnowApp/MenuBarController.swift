@@ -100,6 +100,9 @@ final class StatusViewModel: ObservableObject {
     }
 
     func refreshStatus() async {
+        // Always try to calculate today's total from database (doesn't require agent)
+        self.todayTotalSeconds = await xpcClient.getTodayTotalSeconds()
+
         do {
             let status = try await xpcClient.getStatus()
             self.isWorking = status.isWorking
@@ -108,16 +111,13 @@ final class StatusViewModel: ObservableObject {
             self.accessibilityStatus = AccessibilityDisplayStatus(from: status.accessibilityStatus as AccessibilityStatus)
             self.agentReachable = true
             self.errorMessage = nil
-
-            // Calculate today's total
-            self.todayTotalSeconds = await xpcClient.getTodayTotalSeconds()
         } catch {
             self.agentReachable = false
             self.errorMessage = "Agent not running"
             self.isWorking = false
             self.currentApp = nil
             self.currentTitle = nil
-            self.todayTotalSeconds = 0
+            // Keep todayTotalSeconds - it was calculated from database
         }
     }
 
