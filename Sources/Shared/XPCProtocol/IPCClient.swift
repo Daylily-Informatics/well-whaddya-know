@@ -146,31 +146,51 @@ public final class IPCClient: @unchecked Sendable {
     /// Delete a time range
     public func deleteRange(_ deleteRequest: DeleteRangeRequest) async throws -> Int64 {
         let request = try IPCRequest(method: IPCMethod.submitDeleteRange, params: deleteRequest)
-        return try await send(request)
+        let wrapper: [String: Int64] = try await send(request)
+        guard let id = wrapper["uee_id"] else {
+            throw IPCClientError.invalidResponse("Missing uee_id in response")
+        }
+        return id
     }
 
     /// Add a time range
     public func addRange(_ addRequest: AddRangeRequest) async throws -> Int64 {
         let request = try IPCRequest(method: IPCMethod.submitAddRange, params: addRequest)
-        return try await send(request)
+        let wrapper: [String: Int64] = try await send(request)
+        guard let id = wrapper["uee_id"] else {
+            throw IPCClientError.invalidResponse("Missing uee_id in response")
+        }
+        return id
     }
 
     /// Undo an edit
     public func undoEdit(targetUeeId: Int64) async throws -> Int64 {
         let request = try IPCRequest(method: IPCMethod.submitUndoEdit, params: ["targetUeeId": targetUeeId])
-        return try await send(request)
+        let wrapper: [String: Int64] = try await send(request)
+        guard let id = wrapper["uee_id"] else {
+            throw IPCClientError.invalidResponse("Missing uee_id in response")
+        }
+        return id
     }
 
     /// Apply a tag to a range
     public func applyTag(_ tagRequest: TagRangeRequest) async throws -> Int64 {
         let request = try IPCRequest(method: IPCMethod.applyTag, params: tagRequest)
-        return try await send(request)
+        let wrapper: [String: Int64] = try await send(request)
+        guard let id = wrapper["uee_id"] else {
+            throw IPCClientError.invalidResponse("Missing uee_id in response")
+        }
+        return id
     }
 
     /// Remove a tag from a range
     public func removeTag(_ tagRequest: TagRangeRequest) async throws -> Int64 {
         let request = try IPCRequest(method: IPCMethod.removeTag, params: tagRequest)
-        return try await send(request)
+        let wrapper: [String: Int64] = try await send(request)
+        guard let id = wrapper["uee_id"] else {
+            throw IPCClientError.invalidResponse("Missing uee_id in response")
+        }
+        return id
     }
 
     /// List all tags
@@ -182,25 +202,41 @@ public final class IPCClient: @unchecked Sendable {
     /// Create a new tag
     public func createTag(name: String) async throws -> Int64 {
         let request = try IPCRequest(method: IPCMethod.createTag, params: ["name": name])
-        return try await send(request)
+        let wrapper: [String: Int64] = try await send(request)
+        guard let id = wrapper["tag_id"] else {
+            throw IPCClientError.invalidResponse("Missing tag_id in response")
+        }
+        return id
     }
 
     /// Retire a tag
     public func retireTag(name: String) async throws {
         let request = try IPCRequest(method: IPCMethod.retireTag, params: ["name": name])
-        let _: Bool = try await send(request)
+        let _: [String: Bool] = try await send(request)
     }
 
     /// Export timeline
     public func exportTimeline(_ exportRequest: ExportRequest) async throws {
         let request = try IPCRequest(method: IPCMethod.exportTimeline, params: exportRequest)
-        let _: Bool = try await send(request)
+        let _: [String: Bool] = try await send(request)
+    }
+
+    /// Pause tracking
+    public func pauseTracking() async throws {
+        let request = IPCRequest(method: IPCMethod.pauseTracking)
+        let _: [String: Bool] = try await send(request)
+    }
+
+    /// Resume tracking
+    public func resumeTracking() async throws {
+        let request = IPCRequest(method: IPCMethod.resumeTracking)
+        let _: [String: Bool] = try await send(request)
     }
 
     /// Verify database integrity
     public func verifyDatabase() async throws {
         let request = IPCRequest(method: IPCMethod.verifyDatabase)
-        let _: Bool = try await send(request)
+        let _: [String: Bool] = try await send(request)
     }
 }
 

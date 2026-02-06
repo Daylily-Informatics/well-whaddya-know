@@ -25,16 +25,25 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
 echo "Building $APP_NAME ($BUILD_CONFIG)..."
 
-# Build the executable
+# Build the executable and the agent
 swift build $BUILD_FLAGS --product WellWhaddyaKnow
+swift build $BUILD_FLAGS --product wwkd
 
 # Create app bundle structure
 rm -rf "$APP_BUNDLE"
 mkdir -p "$MACOS_DIR"
 mkdir -p "$RESOURCES_DIR"
+mkdir -p "$CONTENTS_DIR/Library/LaunchAgents"
 
-# Copy executable
+# Copy main executable
 cp "$PROJECT_ROOT/.build/$BUILD_CONFIG/WellWhaddyaKnow" "$MACOS_DIR/$APP_NAME"
+
+# Embed agent binary in app bundle (required for SMAppService)
+cp "$PROJECT_ROOT/.build/$BUILD_CONFIG/wwkd" "$MACOS_DIR/wwkd"
+
+# Embed launchd agent plist (required for SMAppService.agent(plistName:))
+cp "$PROJECT_ROOT/Sources/WellWhaddyaKnowApp/LaunchAgents/com.daylily.wellwhaddyaknow.agent.plist" \
+    "$CONTENTS_DIR/Library/LaunchAgents/com.daylily.wellwhaddyaknow.agent.plist"
 
 # Copy and process Info.plist (replace Xcode variables)
 sed -e "s/\$(EXECUTABLE_NAME)/$APP_NAME/g" \
@@ -61,17 +70,24 @@ ENTITLEMENTS="$PROJECT_ROOT/Sources/WellWhaddyaKnowApp/WellWhaddyaKnow.entitleme
 
 if [ -n "$SIGN_IDENTITY" ]; then
     echo "Signing with: $SIGN_IDENTITY"
+    # Sign the embedded agent binary first (inner → outer)
+    codesign --force --sign "$SIGN_IDENTITY" \
+        --entitlements "$ENTITLEMENTS" \
+        "$MACOS_DIR/wwkd"
+    echo "Signed embedded agent: $MACOS_DIR/wwkd"
+    # Sign the main executable
     codesign --force --sign "$SIGN_IDENTITY" \
         --entitlements "$ENTITLEMENTS" \
         "$MACOS_DIR/$APP_NAME"
+    # Sign the whole bundle last
     codesign --force --sign "$SIGN_IDENTITY" \
         --entitlements "$ENTITLEMENTS" \
         "$APP_BUNDLE"
-    # Also sign the agent if it exists
+    # Also sign the standalone agent build artifact
     AGENT_BIN="$PROJECT_ROOT/.build/$BUILD_CONFIG/wwkd"
     if [ -f "$AGENT_BIN" ]; then
         codesign --force --sign "$SIGN_IDENTITY" "$AGENT_BIN"
-        echo "Signed agent: $AGENT_BIN"
+        echo "Signed standalone agent: $AGENT_BIN"
     fi
 else
     echo "⚠ No Apple Development identity found — using ad-hoc signing"

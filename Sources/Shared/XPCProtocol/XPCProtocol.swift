@@ -61,6 +61,8 @@ public struct StatusResponse: Sendable, Codable, Equatable {
     public let accessibilityStatus: AccessibilityStatus
     public let agentVersion: String
     public let agentUptime: TimeInterval
+    public let agentPID: Int?
+    public let registrationStatus: String?
 
     public init(
         isWorking: Bool,
@@ -68,7 +70,9 @@ public struct StatusResponse: Sendable, Codable, Equatable {
         currentTitle: String?,
         accessibilityStatus: AccessibilityStatus,
         agentVersion: String,
-        agentUptime: TimeInterval
+        agentUptime: TimeInterval,
+        agentPID: Int? = nil,
+        registrationStatus: String? = nil
     ) {
         self.isWorking = isWorking
         self.currentApp = currentApp
@@ -76,6 +80,8 @@ public struct StatusResponse: Sendable, Codable, Equatable {
         self.accessibilityStatus = accessibilityStatus
         self.agentVersion = agentVersion
         self.agentUptime = agentUptime
+        self.agentPID = agentPID
+        self.registrationStatus = registrationStatus
     }
 }
 

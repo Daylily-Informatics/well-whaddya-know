@@ -2,6 +2,7 @@
 // WellWhaddyaKnowApp.swift - Main app entry point for menu bar UI
 
 import SwiftUI
+import XPCProtocol
 
 /// Main application entry point for the WellWhaddyaKnow menu bar app.
 /// This is a menu bar-only app (LSUIElement = true) with no dock icon.
@@ -29,6 +30,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         // Clean up resources
         menuBarController?.stopPolling()
+
+        // Stop the background agent (wwkd) gracefully via SIGTERM.
+        // The agent handles SIGTERM by stopping sensors, emitting agent_stop event,
+        // closing the database, removing the IPC socket, and exiting.
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        task.arguments = ["-TERM", "-f", "wwkd"]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        try? task.run()
+        task.waitUntilExit()
+
+        // Belt-and-suspenders: remove IPC socket if agent didn't clean up in time
+        let socketPath = getIPCSocketPath()
+        if FileManager.default.fileExists(atPath: socketPath) {
+            try? FileManager.default.removeItem(atPath: socketPath)
+        }
     }
 }
 
