@@ -28,8 +28,8 @@ final class MenuBarController: NSObject {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem?.button {
-            // Use SF Symbol for menu bar icon
-            button.image = NSImage(systemSymbolName: "clock.fill", accessibilityDescription: "WellWhaddyaKnow")
+            // Use "knowing eye" SF Symbol — fits the snarky, all-seeing "WellWhaddyaKnow" theme
+            button.image = NSImage(systemSymbolName: "eye.fill", accessibilityDescription: "WellWhaddyaKnow")
             button.action = #selector(togglePopover)
             button.target = self
         }
