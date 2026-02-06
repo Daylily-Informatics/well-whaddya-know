@@ -24,7 +24,7 @@ struct StatusPopoverView: View {
             if viewModel.agentReachable {
                 StatusSection(viewModel: viewModel)
             } else {
-                AgentNotRunningView()
+                AgentNotRunningView(errorMessage: viewModel.errorMessage)
             }
 
             // Accessibility warning
@@ -40,13 +40,19 @@ struct StatusPopoverView: View {
             // Today's total
             TodayTotalView(totalSeconds: viewModel.todayTotalSeconds)
 
+            // Recent activity
+            if !viewModel.recentActivity.isEmpty {
+                Divider()
+                RecentActivityView(entries: viewModel.recentActivity)
+            }
+
             Divider()
 
             // Action buttons
             ActionButtonsView(viewModel: viewModel)
         }
         .padding()
-        .frame(width: 300)
+        .frame(width: 320)
     }
 }
 
@@ -95,19 +101,19 @@ struct StatusSection: View {
     }
 }
 
-/// View shown when agent is not running.
+/// View shown when agent is not running, with specific error details.
 struct AgentNotRunningView: View {
+    let errorMessage: String?
+
     var body: some View {
         VStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundColor(.yellow)
                 .font(.title2)
-            Text("Agent not running")
+            Text(errorMessage ?? "Agent not running")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
-            Text("Start wwkd to track time")
-                .font(.caption)
-                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
@@ -168,6 +174,40 @@ struct TodayTotalView: View {
         let hours = Int(totalSeconds) / 3600
         let minutes = (Int(totalSeconds) % 3600) / 60
         return "\(hours)h \(minutes)m"
+    }
+}
+
+/// Recent activity summary showing last 5 active windows.
+struct RecentActivityView: View {
+    let entries: [RecentActivityEntry]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Recent Activity")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fontWeight(.medium)
+
+            ForEach(entries) { entry in
+                HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(entry.appName)
+                            .font(.system(.caption, design: .default))
+                            .fontWeight(.medium)
+                            .lineLimit(1)
+                        Text(entry.windowTitle ?? "unavailable")
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    Spacer()
+                    Text(entry.durationText)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
     }
 }
 
