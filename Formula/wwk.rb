@@ -4,8 +4,8 @@
 class Wwk < Formula
   desc "CLI for WellWhaddyaKnow time tracker"
   homepage "https://github.com/Daylily-Informatics/well-whaddya-know"
-  url "https://github.com/Daylily-Informatics/well-whaddya-know/archive/refs/tags/0.1.0.tar.gz"
-  sha256 "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5"
+  url "https://github.com/Daylily-Informatics/well-whaddya-know/archive/refs/tags/0.2.0.tar.gz"
+  sha256 "130d9b633199b12e31205cbdba1bf0c9e943bcb18dc08a7cdb81abc4f7279467"
   license "MIT"
   head "https://github.com/Daylily-Informatics/well-whaddya-know.git", branch: "main"
 
@@ -18,20 +18,26 @@ class Wwk < Formula
            "--disable-sandbox",
            "-Xswiftc", "-cross-module-optimization"
     bin.install ".build/release/wwk"
+    bin.install ".build/release/wwkd"
   end
 
   def caveats
     <<~EOS
-      wwk is the CLI for WellWhaddyaKnow time tracker.
+      wwk is the CLI and wwkd is the background agent for WellWhaddyaKnow.
 
-      The background agent (wwkd) must be running for time tracking.
-      Install the full WellWhaddyaKnow.app for the menu bar UI and agent.
+      Start the agent:
+        wwkd &
 
       Usage:
         wwk status          # Show current status
         wwk today           # Today's summary
         wwk week            # This week's summary
         wwk --help          # Full command reference
+
+      For the menu bar UI, build WellWhaddyaKnow.app from source:
+        git clone https://github.com/Daylily-Informatics/well-whaddya-know.git
+        cd well-whaddya-know && bash scripts/build-app.sh --release
+        open .build/release/WellWhaddyaKnow.app
     EOS
   end
 

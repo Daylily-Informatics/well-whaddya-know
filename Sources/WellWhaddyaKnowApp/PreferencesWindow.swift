@@ -5,6 +5,9 @@ import SwiftUI
 import XPCProtocol
 import ServiceManagement
 import SQLite3
+import os.log
+
+private let prefLog = Logger(subsystem: "com.daylily.wellwhaddyaknow", category: "Preferences")
 
 /// Preferences window showing data location, permissions, and settings
 struct PreferencesWindow: View {
@@ -37,7 +40,7 @@ struct PreferencesWindow: View {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 560, height: 520)
+        .frame(minWidth: 560, minHeight: 520)
         .task {
             await viewModel.refreshStatus()
         }
@@ -64,6 +67,7 @@ final class PreferencesViewModel: ObservableObject {
     @Published var agentRegistered: Bool = false
     @Published var agentEnabled: Bool = false
     @Published var requiresApproval: Bool = false
+    @Published var isPlistMissing: Bool = false
     @Published var socketPath: String = ""
     @Published var socketExists: Bool = false
     @Published var ipcConnected: Bool = false
@@ -75,6 +79,7 @@ final class PreferencesViewModel: ObservableObject {
     @Published var totalTrackedTime: String = "N/A"
     @Published var uniqueApps: Int = 0
     @Published var appGroupAccessible: Bool = false
+    @Published var isCurrentlyWorking: Bool = false
 
     private let xpcClient = XPCClient()
 
@@ -113,11 +118,13 @@ final class PreferencesViewModel: ObservableObject {
         agentRegistered = lifecycle.isRegistered
         agentEnabled = lifecycle.isEnabled
         requiresApproval = lifecycle.requiresApproval
+        isPlistMissing = lifecycle.isPlistMissing
 
         // Query agent via IPC for real status
         do {
             let status = try await xpcClient.getStatus()
             agentRunning = true
+            isCurrentlyWorking = status.isWorking
             agentVersion = status.agentVersion
             agentUptime = status.agentUptime
             agentPID = status.agentPID
@@ -132,6 +139,7 @@ final class PreferencesViewModel: ObservableObject {
             }
         } catch {
             agentRunning = false
+            isCurrentlyWorking = false
             agentVersion = ""
             agentUptime = 0
             agentPID = nil
@@ -202,7 +210,8 @@ final class PreferencesViewModel: ObservableObject {
         uniqueApps = Int(queryScalarInt64(db: db!, sql: "SELECT COUNT(DISTINCT app_id) FROM raw_activity_events;") ?? 0)
 
         // Total tracked time (all-time) using working intervals from system_state_events
-        let allTimeTotalSec = queryTotalWorkingTime(db: db!)
+        // Only count up to "now" if the agent is currently working
+        let allTimeTotalSec = queryTotalWorkingTime(db: db!, isCurrentlyWorking: isCurrentlyWorking)
         totalTrackedTime = formatDuration(allTimeTotalSec)
     }
 
@@ -228,61 +237,109 @@ final class PreferencesViewModel: ObservableObject {
     }
 
     func startAgent() {
-        // Launch wwkd from the same bundle location
-        let agentPath: String
-        if let bundlePath = Bundle.main.executablePath {
-            let bundleDir = (bundlePath as NSString).deletingLastPathComponent
-            agentPath = (bundleDir as NSString).appendingPathComponent("wwkd")
-        } else {
-            agentPath = "/usr/local/bin/wwkd"
+        // Clean up stale socket before starting (agent can't bind if orphan socket exists)
+        let sock = getIPCSocketPath()
+        if FileManager.default.fileExists(atPath: sock) {
+            try? FileManager.default.removeItem(atPath: sock)
+            prefLog.info("Removed stale socket before agent start")
         }
 
-        // Check common locations
+        // Build candidate paths for the wwkd binary
+        let bundleAgentPath: String
+        if let bundlePath = Bundle.main.executablePath {
+            let bundleDir = (bundlePath as NSString).deletingLastPathComponent
+            bundleAgentPath = (bundleDir as NSString).appendingPathComponent("wwkd")
+        } else {
+            bundleAgentPath = "/usr/local/bin/wwkd"
+        }
+
         let candidates = [
-            agentPath,
+            bundleAgentPath,
             ProcessInfo.processInfo.environment["HOME"].map { "\($0)/projects/daylily/well-whaddya-know/.build/debug/wwkd" } ?? "",
             "/usr/local/bin/wwkd",
         ]
 
         for path in candidates where FileManager.default.isExecutableFile(atPath: path) {
+            prefLog.info("Starting agent from: \(path)")
             let process = Process()
             process.executableURL = URL(fileURLWithPath: path)
             process.arguments = []
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
-            try? process.run()
-            agentStatusMessage = "Starting..."
-            // Refresh after a short delay
+            do {
+                try process.run()
+                agentStatusMessage = "Starting..."
+                prefLog.info("Agent process launched (pid \(process.processIdentifier))")
+            } catch {
+                prefLog.error("Failed to launch agent at \(path): \(error.localizedDescription)")
+                agentStatusMessage = "Launch failed: \(error.localizedDescription)"
+            }
             Task {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 await refreshStatus()
             }
             return
         }
+        prefLog.error("Cannot find wwkd binary in any candidate path")
         agentStatusMessage = "Cannot find wwkd binary"
     }
 
     func stopAgent() {
-        // Send SIGTERM to wwkd
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        task.arguments = ["-TERM", "-f", "wwkd"]
-        task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
-        try? task.run()
-        task.waitUntilExit()
         agentStatusMessage = "Stopping..."
-        Task {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            await refreshStatus()
+        prefLog.info("Stopping agent via pkill")
+        Task.detached {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+            task.arguments = ["-TERM", "wwkd"]
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+            do {
+                try task.run()
+                task.waitUntilExit()
+                prefLog.info("pkill exited with status \(task.terminationStatus)")
+            } catch {
+                prefLog.error("pkill failed: \(error.localizedDescription)")
+            }
+
+            // Clean up socket after stop
+            let sock = getIPCSocketPath()
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            if FileManager.default.fileExists(atPath: sock) {
+                try? FileManager.default.removeItem(atPath: sock)
+                prefLog.info("Removed socket after agent stop")
+            }
+
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            _ = await MainActor.run { [weak self] in
+                Task { await self?.refreshStatus() }
+            }
         }
     }
 
     func restartAgent() {
-        stopAgent()
-        Task {
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            startAgent()
+        agentStatusMessage = "Restarting..."
+        prefLog.info("Restarting agent")
+        Task.detached {
+            // Stop
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+            task.arguments = ["-TERM", "wwkd"]
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+            try? task.run()
+            task.waitUntilExit()
+
+            // Wait for agent to exit, clean socket
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            let sock = getIPCSocketPath()
+            if FileManager.default.fileExists(atPath: sock) {
+                try? FileManager.default.removeItem(atPath: sock)
+            }
+
+            // Start on main actor
+            await MainActor.run { [weak self] in
+                self?.startAgent()
+            }
         }
     }
 
@@ -326,6 +383,10 @@ final class PreferencesViewModel: ObservableObject {
     }
 
     func openLoginItemsSettings() {
+        // Auto-register before opening Login Items so the app appears in the list
+        if !agentRegistered {
+            registerAgent()
+        }
         AgentLifecycleManager.shared.openLoginItemsSettings()
     }
 
@@ -420,7 +481,7 @@ final class PreferencesViewModel: ObservableObject {
         return sqlite3_column_int64(stmt, 0)
     }
 
-    private func queryTotalWorkingTime(db: OpaquePointer) -> Double {
+    private func queryTotalWorkingTime(db: OpaquePointer, isCurrentlyWorking: Bool) -> Double {
         // Sum up working intervals from system_state_events
         let sql = """
             SELECT event_ts_us, is_working FROM system_state_events
@@ -435,8 +496,8 @@ final class PreferencesViewModel: ObservableObject {
 
         while sqlite3_step(stmt) == SQLITE_ROW {
             let tsUs = sqlite3_column_int64(stmt, 0)
-            let isWorking = sqlite3_column_int(stmt, 1) != 0
-            if isWorking {
+            let working = sqlite3_column_int(stmt, 1) != 0
+            if working {
                 if lastWorkingTs == nil {
                     lastWorkingTs = tsUs
                 }
@@ -447,8 +508,9 @@ final class PreferencesViewModel: ObservableObject {
                 }
             }
         }
-        // If still working, count up to now
-        if let start = lastWorkingTs {
+        // Only count up to now if the agent reports it is currently working.
+        // When paused, the last system_state_event already closed the interval.
+        if let start = lastWorkingTs, isCurrentlyWorking {
             let nowUs = Int64(Date().timeIntervalSince1970 * 1_000_000)
             totalUs += nowUs - start
         }
@@ -579,9 +641,15 @@ struct DiagnosticsPreferencesView: View {
         ScrollView {
             Form {
                 Section("Agent Status") {
-                    diagRow("Registered", ok: viewModel.agentRegistered, detail: viewModel.registrationStatusText)
-                    diagRow("Enabled", ok: viewModel.agentEnabled,
-                            detail: viewModel.requiresApproval ? "Requires approval in System Settings" : nil)
+                    if viewModel.isPlistMissing {
+                        // Dev build: plist not in bundle, show neutral indicators
+                        diagRow("Registered", ok: nil, detail: "N/A — dev build (no LaunchAgent plist)")
+                        diagRow("Enabled", ok: nil, detail: "N/A — dev build")
+                    } else {
+                        diagRow("Registered", ok: viewModel.agentRegistered, detail: viewModel.registrationStatusText)
+                        diagRow("Enabled", ok: viewModel.agentEnabled,
+                                detail: viewModel.requiresApproval ? "Requires approval in System Settings" : nil)
+                    }
                     diagRow("Running", ok: viewModel.agentRunning)
                     LabeledContent("PID:") {
                         Text(viewModel.agentPID.map { String($0) } ?? "N/A")
@@ -665,11 +733,17 @@ struct DiagnosticsPreferencesView: View {
         .padding(.horizontal)
     }
 
-    private func diagRow(_ label: String, ok: Bool, detail: String? = nil) -> some View {
+    private func diagRow(_ label: String, ok: Bool?, detail: String? = nil) -> some View {
         HStack {
-            Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill")
-                .foregroundColor(ok ? .green : .red)
-                .font(.caption)
+            if let ok = ok {
+                Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    .foregroundColor(ok ? .green : .red)
+                    .font(.caption)
+            } else {
+                Image(systemName: "minus.circle.fill")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+            }
             Text(label)
                 .font(.caption)
             if let detail = detail {

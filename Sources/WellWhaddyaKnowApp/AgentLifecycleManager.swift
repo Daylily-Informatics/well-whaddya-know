@@ -23,6 +23,7 @@ final class AgentLifecycleManager: ObservableObject {
     @Published var isRegistered: Bool = false
     @Published var isEnabled: Bool = false
     @Published var requiresApproval: Bool = false
+    @Published var isPlistMissing: Bool = false
 
     private init() {
         self.service = SMAppService.agent(plistName: Self.agentPlistName)
@@ -56,10 +57,11 @@ final class AgentLifecycleManager: ObservableObject {
             isEnabled = false
             requiresApproval = true
         case .notFound:
-            statusDescription = "Agent plist not found in bundle"
+            statusDescription = "Agent plist not found in bundle (dev build)"
             isRegistered = false
             isEnabled = false
             requiresApproval = false
+            isPlistMissing = true
         @unknown default:
             statusDescription = "Unknown status"
             isRegistered = false

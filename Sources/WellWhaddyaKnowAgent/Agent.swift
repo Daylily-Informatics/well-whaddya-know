@@ -219,4 +219,49 @@ public actor Agent: SensorEventHandler {
             axStatus: axStatus
         )
     }
+
+    // MARK: - Pause / Resume Tracking
+
+    /// Manually pause tracking. Emits a state_change event with isWorking=false.
+    public func pauseTracking() throws {
+        guard !state.isPausedByUser else { return } // already paused
+        let oldIsWorking = state.isWorking
+        state.isPausedByUser = true
+        let newIsWorking = state.isWorking
+
+        if oldIsWorking != newIsWorking {
+            let timestampUs = getCurrentTimestampUs()
+            let monotonicNs = getMonotonicTimeNs()
+            try emitSystemStateEvent(
+                timestampUs: timestampUs,
+                monotonicNs: monotonicNs,
+                kind: .stateChange,
+                source: .manual
+            )
+        }
+    }
+
+    /// Resume tracking after a manual pause. Emits a state_change event.
+    public func resumeTracking() async throws {
+        guard state.isPausedByUser else { return } // not paused
+        let oldIsWorking = state.isWorking
+        state.isPausedByUser = false
+        let newIsWorking = state.isWorking
+
+        if oldIsWorking != newIsWorking {
+            let timestampUs = getCurrentTimestampUs()
+            let monotonicNs = getMonotonicTimeNs()
+            try emitSystemStateEvent(
+                timestampUs: timestampUs,
+                monotonicNs: monotonicNs,
+                kind: .stateChange,
+                source: .manual
+            )
+
+            // If now working, emit initial activity event (like wake)
+            if newIsWorking {
+                try await emitInitialActivityEvent(timestampUs: timestampUs, monotonicNs: monotonicNs)
+            }
+        }
+    }
 }

@@ -83,6 +83,14 @@ public protocol AgentServiceProtocol: Sendable {
     /// - Throws: XPCError.exportFailed if file write fails
     func exportTimeline(_ request: ExportRequest) async throws
 
+    // MARK: - Tracking Control
+
+    /// Pause tracking manually (user-initiated)
+    func pauseTracking() async throws
+
+    /// Resume tracking after a manual pause
+    func resumeTracking() async throws
+
     // MARK: - Health / Doctor
 
     /// Get agent health status
