@@ -135,6 +135,7 @@ let package = Package(
             exclude: [
                 "Info.plist",
                 "WellWhaddyaKnow.entitlements",
+                "LaunchAgents",
             ],
             swiftSettings: [
                 .unsafeFlags(["-parse-as-library"])

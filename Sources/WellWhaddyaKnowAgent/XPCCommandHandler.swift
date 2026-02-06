@@ -53,7 +53,8 @@ public final class XPCCommandHandler: @unchecked Sendable {
             currentTitle: currentTitle,
             accessibilityStatus: accessibilityStatus,
             agentVersion: Agent.agentVersion,
-            agentUptime: Date().timeIntervalSince(startTime)
+            agentUptime: Date().timeIntervalSince(startTime),
+            agentPID: Int(ProcessInfo.processInfo.processIdentifier)
         )
     }
 
