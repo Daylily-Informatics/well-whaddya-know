@@ -626,7 +626,7 @@ struct ExportsTabView: View {
         panel.nameFieldStringValue = "wwk-export-\(formatDateForFilename(startDate))"
 
         panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
+            guard response == .OK, let _ = panel.url else { return }
             // TODO: Perform actual export via CLI or direct database read
             isExporting = false
         }

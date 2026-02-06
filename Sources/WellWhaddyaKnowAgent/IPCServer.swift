@@ -45,7 +45,7 @@ public final class IPCServer: @unchecked Sendable {
 
         // Copy path into sun_path, avoiding overlapping access
         let pathSize = MemoryLayout.size(ofValue: addr.sun_path)
-        _ = socketPath.withCString { src in
+        socketPath.withCString { src in
             withUnsafeMutableBytes(of: &addr.sun_path) { dest in
                 let count = min(strlen(src), pathSize - 1)
                 memcpy(dest.baseAddress!, src, count)
