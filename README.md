@@ -205,3 +205,4 @@ MIT License. See [LICENSE](LICENSE) for details.
 See [PRIVACY.md](PRIVACY.md) for our privacy policy.
 
 **TL;DR**: All data stays on your machine. No cloud. No telemetry. No analytics.
+ 
