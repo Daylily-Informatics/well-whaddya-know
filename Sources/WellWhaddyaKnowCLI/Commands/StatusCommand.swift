@@ -41,7 +41,7 @@ struct Status: AsyncParsableCommand {
                     "current_app": currentApp as Any,
                     "current_title": currentTitle as Any,
                     "accessibility_status": "unknown",
-                    "agent_version": "0.1.0"
+                    "agent_version": "0.3.2"
                 ]
                 if let data = try? JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys]),
                    let json = String(data: data, encoding: .utf8) {
@@ -56,7 +56,7 @@ struct Status: AsyncParsableCommand {
                     print("Current Title: \(title)")
                 }
                 print("Accessibility: unknown (check via agent)")
-                print("Agent Version: 0.1.0")
+                print("Agent Version: 0.3.2")
             }
         } catch let error as CLIError {
             if options.json {

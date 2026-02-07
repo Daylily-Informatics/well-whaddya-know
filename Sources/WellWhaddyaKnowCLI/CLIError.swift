@@ -17,7 +17,18 @@ enum CLIError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .databaseNotFound(let path):
-            return "Database not found at: \(path)"
+            return """
+            Database not found at: \(path)
+
+            The wwkd agent may not be running or has never been started.
+
+            To start the agent:
+              wwk agent install    # Install as login item (starts at login)
+              wwk agent start      # Start now
+
+            To check agent status:
+              wwk agent status
+            """
         case .databaseError(let message):
             return "Database error: \(message)"
         case .agentNotRunning:
