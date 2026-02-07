@@ -67,12 +67,19 @@ if [ -z "$SIGN_IDENTITY" ]; then
 fi
 
 ENTITLEMENTS="$PROJECT_ROOT/Sources/WellWhaddyaKnowApp/WellWhaddyaKnow.entitlements"
+AGENT_ENTITLEMENTS="$PROJECT_ROOT/Sources/WellWhaddyaKnowAgent/wwkd.entitlements"
+
+# Info.plist is embedded into wwkd at link time via -sectcreate in Package.swift.
+# codesign uses -i to set the identifier; the embedded __info_plist section provides
+# CFBundleIdentifier to libsystem_secinit for sandbox initialization.
 
 if [ -n "$SIGN_IDENTITY" ]; then
     echo "Signing with: $SIGN_IDENTITY"
     # Sign the embedded agent binary first (inner → outer)
+    # Use agent-specific entitlements; Info.plist is already embedded in the binary
     codesign --force --sign "$SIGN_IDENTITY" \
-        --entitlements "$ENTITLEMENTS" \
+        --entitlements "$AGENT_ENTITLEMENTS" \
+        -i "com.daylily.wellwhaddyaknow.agent" \
         "$MACOS_DIR/wwkd"
     echo "Signed embedded agent: $MACOS_DIR/wwkd"
     # Sign the main executable
@@ -86,13 +93,19 @@ if [ -n "$SIGN_IDENTITY" ]; then
     # Also sign the standalone agent build artifact
     AGENT_BIN="$PROJECT_ROOT/.build/$BUILD_CONFIG/wwkd"
     if [ -f "$AGENT_BIN" ]; then
-        codesign --force --sign "$SIGN_IDENTITY" "$AGENT_BIN"
+        codesign --force --sign "$SIGN_IDENTITY" \
+            -i "com.daylily.wellwhaddyaknow.agent" \
+            "$AGENT_BIN"
         echo "Signed standalone agent: $AGENT_BIN"
     fi
 else
     echo "⚠ No Apple Development identity found — using ad-hoc signing"
     echo "  Accessibility permissions may reset on each rebuild"
-    codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null || true
+    codesign --force --sign - \
+        -i "com.daylily.wellwhaddyaknow.agent" \
+        "$MACOS_DIR/wwkd" 2>/dev/null || true
+    codesign --force --sign - "$MACOS_DIR/$APP_NAME" 2>/dev/null || true
+    codesign --force --sign - "$APP_BUNDLE" 2>/dev/null || true
 fi
 
 echo ""

@@ -99,8 +99,20 @@ let package = Package(
             name: "WellWhaddyaKnowAgent",
             dependencies: ["Storage", "Sensors", "CoreModel", "Timeline", "XPCProtocol", "Reporting"],
             path: "Sources/WellWhaddyaKnowAgent",
+            exclude: [
+                "Info.plist",
+                "wwkd.entitlements",
+            ],
             swiftSettings: [
                 .unsafeFlags(["-parse-as-library"])
+            ],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Sources/WellWhaddyaKnowAgent/Info.plist",
+                ])
             ]
         ),
 
