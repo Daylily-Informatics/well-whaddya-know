@@ -40,7 +40,81 @@ A **local-only** macOS time tracker that records how time passed on your machine
 
 ## Installation
 
-### From Source (Swift Package Manager)
+### Homebrew — CLI (`wwk` + `wwkd` agent)
+
+```bash
+brew tap Daylily-Informatics/tap
+brew install wwk
+```
+
+Or as a single command:
+
+```bash
+brew install Daylily-Informatics/tap/wwk
+```
+
+This installs:
+- `wwk` — the command-line interface
+- `wwkd` — the background agent that records events
+
+After installing, set up the agent to start at login:
+
+```bash
+wwk agent install   # creates a launchd plist and starts wwkd
+wwk agent status    # verify it's running
+```
+
+### Homebrew — GUI app (`WellWhaddyaKnow.app`)
+
+```bash
+brew install --cask Daylily-Informatics/tap/wellwhaddyaknow
+```
+
+This installs `WellWhaddyaKnow.app` to `/Applications` (requires admin/sudo). The app embeds its own copy of `wwkd` and manages the agent lifecycle automatically.
+
+**Non-admin users** (no sudo access): install to your home Applications folder instead:
+
+```bash
+mkdir -p ~/Applications
+brew install --cask Daylily-Informatics/tap/wellwhaddyaknow --appdir=~/Applications
+```
+
+macOS recognizes `~/Applications` as a valid launch location — Spotlight, Launchpad, and `open -a WellWhaddyaKnow` all work from there.
+
+### Build from Source
+
+Requires **Xcode 14+** (Swift 6.0) and **macOS 13+**.
+
+#### GUI app (`.app` bundle)
+
+```bash
+git clone https://github.com/Daylily-Informatics/well-whaddya-know.git
+cd well-whaddya-know
+./scripts/build-app.sh            # debug build
+# or
+./scripts/build-app.sh --release  # optimized release build
+```
+
+The script builds both `WellWhaddyaKnow` and `wwkd`, assembles a signed `.app` bundle, and prints the path:
+
+```
+.build/debug/WellWhaddyaKnow.app    # debug
+.build/release/WellWhaddyaKnow.app  # release
+```
+
+To run:
+
+```bash
+open .build/debug/WellWhaddyaKnow.app
+```
+
+To install system-wide:
+
+```bash
+sudo cp -R .build/release/WellWhaddyaKnow.app /Applications/
+```
+
+#### CLI only
 
 ```bash
 git clone https://github.com/Daylily-Informatics/well-whaddya-know.git
@@ -48,101 +122,117 @@ cd well-whaddya-know
 swift build -c release
 ```
 
-### Homebrew (CLI only)
+Binaries land in `.build/release/`:
 
-```bash
-brew tap Daylily-Informatics/tap
-brew install wwk
+```
+.build/release/wwk    # CLI
+.build/release/wwkd   # background agent
 ```
 
-> **Multi-user macOS systems:** If `/opt/homebrew` is owned by another user, install from source instead:
-> ```bash
-> git clone https://github.com/Daylily-Informatics/well-whaddya-know.git
-> cd well-whaddya-know && swift build -c release
-> cp .build/release/wwk .build/release/wwkd ~/.local/bin/  # ensure ~/.local/bin is in PATH
-> ```
+Copy them somewhere on your `PATH`:
 
-### Mac App Store
+```bash
+cp .build/release/wwk .build/release/wwkd /usr/local/bin/
+# or for a single-user install:
+mkdir -p ~/.local/bin
+cp .build/release/wwk .build/release/wwkd ~/.local/bin/
+```
 
-Coming soon.
+Then install the agent as a login item:
+
+```bash
+wwk agent install
+```
+
+> **Multi-user macOS note:** Homebrew is single-user by default. If `/opt/homebrew` is owned by
+> another account, either share ownership (add both users to a `brew` group) or build from source
+> and copy binaries to a per-user location as shown above. For the GUI cask, non-admin users
+> should use `--appdir=~/Applications` (see [Homebrew GUI](#homebrew--gui-app-wellwhaddyaknowapp) above).
 
 ## Quick Start
 
 ```bash
-# Build the project
-swift build
+# Prerequisites: macOS 13+, Xcode 14+ (or Command Line Tools with Swift 6)
 
-# Run tests
-swift test
+# --- Option A: Homebrew ---
+brew tap Daylily-Informatics/tap
+brew install wwk                                          # CLI + agent
+brew install --cask Daylily-Informatics/tap/wellwhaddyaknow  # GUI app
+wwk agent install                                         # start agent at login
 
-# Build release
-swift build -c release
+# --- Option B: Build from source ---
+git clone https://github.com/Daylily-Informatics/well-whaddya-know.git
+cd well-whaddya-know
+./scripts/build-app.sh --release                          # builds .app bundle
+open .build/release/WellWhaddyaKnow.app                   # launch the GUI
 
-# The executables are in .build/release/
-ls .build/release/
-# wwk          - CLI
-# wwkd         - Background agent
+# --- Verify ---
+wwk status          # should show current tracking state
+wwk today           # today's time breakdown by app
 ```
 
 ## Usage
 
 ### Menu Bar App
 
-1. Launch `WellWhaddyaKnow.app`
+1. Launch `WellWhaddyaKnow.app` (or install the cask — it appears in the menu bar automatically)
 2. Click the clock icon in the menu bar to see current status
-3. Click "Open Viewer" to see timeline, manage tags, and export data
-4. Click "Preferences..." to configure settings and check permissions
+3. Click **Open Viewer** to see timeline, reports, tags, and export data
+4. Click **Preferences…** to configure display timezone, permissions, and the login-item agent
 
 ### CLI Commands
 
 ```bash
-# Show current status
-wwk status
+# Reporting
+wwk status                                  # current tracking state
+wwk today                                   # today's summary (by app)
+wwk week                                    # this week's summary
+wwk summary --from 2026-01-01 --to 2026-01-31 --group-by app
+wwk summary --from 2026-01-01 --to 2026-01-07 --group-by day
 
-# Today's summary
-wwk today
+# Export
+wwk export --from 2026-01-01 --to 2026-01-31 --format csv --out report.csv
+wwk export --from 2026-01-01 --to 2026-01-31 --format json --out -
 
-# This week's summary
-wwk week
-
-# Custom date range summary
-wwk summary --from 2024-01-01 --to 2024-01-31
-
-# Group by app, title, tag, or day
-wwk summary --from 2024-01-01 --to 2024-01-31 --group-by app
-
-# Export to CSV
-wwk export --from 2024-01-01 --to 2024-01-31 --format csv --out report.csv
-
-# Export to JSON (stdout)
-wwk export --from 2024-01-01 --to 2024-01-31 --format json --out -
-
-# Tag management
+# Tags
 wwk tag list
 wwk tag create "project-alpha"
-wwk tag apply --from 2024-01-15T09:00:00 --to 2024-01-15T12:00:00 --tag "project-alpha"
+wwk tag apply  --from 2026-01-15T09:00:00 --to 2026-01-15T12:00:00 --tag "project-alpha"
+wwk tag remove --from 2026-01-15T09:00:00 --to 2026-01-15T12:00:00 --tag "project-alpha"
 
 # Edit timeline
-wwk edit delete --from 2024-01-15T12:00:00 --to 2024-01-15T13:00:00 --note "lunch break"
+wwk edit delete --from 2026-01-15T12:00:00 --to 2026-01-15T13:00:00 --note "lunch break"
 wwk edit undo --id <edit-id>
 
-# System health check
-wwk doctor
+# Agent management
+wwk agent status     # show agent process, launchd, and IPC socket state
+wwk agent install    # install launchd plist and start agent
+wwk agent start      # start agent (must be installed first)
+wwk agent stop       # stop agent
+wwk agent uninstall  # stop agent and remove launchd plist
 
-# Database info
-wwk db info
-wwk db verify
+# Diagnostics
+wwk doctor           # permissions, agent, db integrity
+wwk db info          # schema version, event counts, date ranges
+wwk db verify        # PRAGMA integrity_check
 ```
 
-### JSON Output
+### Global Options
 
-Add `--json` to most commands for machine-readable output:
+All commands accept these flags:
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Machine-readable JSON output |
+| `--db <path>` | Override database path (default: app group container) |
+| `--timezone <IANA>` | Display timezone, e.g. `America/New_York` (default: GUI preference or system) |
 
 ```bash
-wwk status --json
 wwk today --json
-wwk summary --from 2024-01-01 --to 2024-01-31 --json
+wwk summary --from 2026-01-01 --to 2026-01-31 --json --timezone America/Chicago
 ```
+
+See [docs/cli.md](docs/cli.md) for the full CLI reference.
 
 ## Data Storage
 
@@ -152,7 +242,7 @@ All data is stored locally in:
 ~/Library/Group Containers/group.com.daylily.wellwhaddyaknow/WellWhaddyaKnow/wwk.sqlite
 ```
 
-The database uses SQLite with WAL mode and immutable append-only event tables.
+The database uses SQLite with WAL mode and immutable append-only event tables. All timestamps are stored as UTC microseconds since Unix epoch. See [docs/datastore.md](docs/datastore.md) for the full schema.
 
 ## Permissions
 
@@ -161,17 +251,18 @@ The database uses SQLite with WAL mode and immutable append-only event tables.
 To capture window titles, grant Accessibility permission:
 
 1. Open **System Settings** → **Privacy & Security** → **Accessibility**
-2. Add `WellWhaddyaKnow.app` and `wwkd`
+2. Add `WellWhaddyaKnow.app` (and `wwkd` if running standalone)
 
-Without this permission, the app still tracks by application but window titles will be unavailable.
+Without this permission, the app still tracks which application is active but window titles will show as "unavailable".
 
 ## Architecture
 
 WellWhaddyaKnow uses an **event-sourcing architecture**:
 
-- All state changes are recorded as immutable events
+- All state changes are recorded as immutable events in SQLite
 - Timeline is computed deterministically from events
-- User edits are stored as separate events (never modify raw data)
+- User edits are stored as separate events (raw data is never modified)
+- All timestamps stored in UTC; display timezone is presentation-only
 - See [docs/architecture.md](docs/architecture.md) for details
 
 ## Documentation
@@ -181,26 +272,23 @@ WellWhaddyaKnow uses an **event-sourcing architecture**:
 - [CLI Reference](docs/cli.md)
 - [App Store Notes](docs/app-store.md)
 - [Privacy Policy](PRIVACY.md)
+- [Specification](SPEC.md)
 
 ## Development
 
-### Build
-
 ```bash
+# Build (debug)
 swift build
-```
 
-### Test
+# Build (release)
+swift build -c release
 
-```bash
+# Build .app bundle (includes agent, code signing)
+./scripts/build-app.sh           # debug
+./scripts/build-app.sh --release # release
+
+# Run tests (222 tests)
 swift test
-```
-
-### Lint
-
-```bash
-# If using SwiftLint
-swiftlint
 ```
 
 ## License
@@ -212,4 +300,3 @@ MIT License. See [LICENSE](LICENSE) for details.
 See [PRIVACY.md](PRIVACY.md) for our privacy policy.
 
 **TL;DR**: All data stays on your machine. No cloud. No telemetry. No analytics.
- 
