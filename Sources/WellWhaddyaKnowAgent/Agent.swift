@@ -182,14 +182,15 @@ public actor Agent: SensorEventHandler {
                     monotonicNs: monotonicNs
                 )
 
-            case .titleChanged(let pid, let title, let status, let source, let timestamp, let monotonicNs):
+            case .titleChanged(let pid, let title, let status, let source, let timestamp, let monotonicNs, let axErrorCode):
                 try await handleTitleChanged(
                     pid: pid,
                     title: title,
                     status: status,
                     source: source,
                     timestamp: timestamp,
-                    monotonicNs: monotonicNs
+                    monotonicNs: monotonicNs,
+                    axErrorCode: axErrorCode
                 )
 
             case .accessibilityPermissionChanged(let granted, let timestamp, let monotonicNs):
