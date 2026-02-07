@@ -55,6 +55,13 @@ brew tap Daylily-Informatics/tap
 brew install wwk
 ```
 
+> **Multi-user macOS systems:** If `/opt/homebrew` is owned by another user, install from source instead:
+> ```bash
+> git clone https://github.com/Daylily-Informatics/well-whaddya-know.git
+> cd well-whaddya-know && swift build -c release
+> cp .build/release/wwk .build/release/wwkd ~/.local/bin/  # ensure ~/.local/bin is in PATH
+> ```
+
 ### Mac App Store
 
 Coming soon.
