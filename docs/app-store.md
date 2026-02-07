@@ -13,6 +13,8 @@ This document covers entitlements, privacy manifest, and App Store compliance fo
 <dict>
     <key>com.apple.security.app-sandbox</key>
     <true/>
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
     <key>com.apple.security.application-groups</key>
     <array>
         <string>group.com.daylily.wellwhaddyaknow</string>

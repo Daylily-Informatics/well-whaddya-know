@@ -10,7 +10,7 @@ struct WWK: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "wwk",
         abstract: "WellWhaddyaKnow - macOS time tracking CLI",
-        version: "0.3.4",
+        version: "0.3.5",
         subcommands: [
             Status.self,
             Summary.self,
