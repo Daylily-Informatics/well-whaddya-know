@@ -96,38 +96,40 @@ enum DateRangePreset: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Compute (startOfDay, endOfDay) for this preset relative to now,
+    /// Compute (start, end) for this preset relative to now,
     /// using the user's preferred display timezone.
+    /// For ranges that include the current day, end is capped at `now`
+    /// (not end-of-day) so durations reflect elapsed time, not future time.
     func dateRange() -> (start: Date, end: Date)? {
         let calendar = DisplayTimezoneHelper.calendar
         let now = Date()
 
         switch self {
         case .today:
-            return (calendar.startOfDay(for: now), Self.endOfDay(now, calendar: calendar))
+            return (calendar.startOfDay(for: now), now)
         case .yesterday:
             let yesterday = calendar.date(byAdding: .day, value: -1, to: now)!
             return (calendar.startOfDay(for: yesterday), Self.endOfDay(yesterday, calendar: calendar))
         case .thisWeek:
             let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? now
-            return (weekStart, Self.endOfDay(now, calendar: calendar))
+            return (weekStart, now)
         case .last7Days:
             let start = calendar.date(byAdding: .day, value: -6, to: now)!
-            return (calendar.startOfDay(for: start), Self.endOfDay(now, calendar: calendar))
+            return (calendar.startOfDay(for: start), now)
         case .thisMonth:
             let monthStart = calendar.dateInterval(of: .month, for: now)?.start ?? now
-            return (monthStart, Self.endOfDay(now, calendar: calendar))
+            return (monthStart, now)
         case .last30Days:
             let start = calendar.date(byAdding: .day, value: -29, to: now)!
-            return (calendar.startOfDay(for: start), Self.endOfDay(now, calendar: calendar))
+            return (calendar.startOfDay(for: start), now)
         case .last12Months:
             let start = calendar.date(byAdding: .month, value: -12, to: now)!
-            return (calendar.startOfDay(for: start), Self.endOfDay(now, calendar: calendar))
+            return (calendar.startOfDay(for: start), now)
         case .yearToDate:
             var comps = calendar.dateComponents([.year], from: now)
             comps.month = 1; comps.day = 1
             let yearStart = calendar.date(from: comps) ?? now
-            return (yearStart, Self.endOfDay(now, calendar: calendar))
+            return (yearStart, now)
         case .custom:
             return nil
         }
@@ -145,12 +147,7 @@ enum DateRangePreset: String, CaseIterable, Identifiable {
 final class ViewerViewModel: ObservableObject {
     @Published var selectedDate: Date = Date()
     @Published var startTime: Date = DisplayTimezoneHelper.calendar.startOfDay(for: Date())
-    @Published var endTime: Date = {
-        let cal = DisplayTimezoneHelper.calendar
-        var comps = cal.dateComponents([.year, .month, .day], from: Date())
-        comps.hour = 23; comps.minute = 59; comps.second = 59
-        return cal.date(from: comps) ?? Date()
-    }()
+    @Published var endTime: Date = Date()
     @Published var selectedPreset: DateRangePreset = .today
     @Published var segments: [TimelineSegment] = []
     @Published var tags: [TagItem] = []
@@ -160,12 +157,7 @@ final class ViewerViewModel: ObservableObject {
     // Reports tab state
     @Published var reportPreset: DateRangePreset = .today
     @Published var reportStartTime: Date = DisplayTimezoneHelper.calendar.startOfDay(for: Date())
-    @Published var reportEndTime: Date = {
-        let cal = DisplayTimezoneHelper.calendar
-        var comps = cal.dateComponents([.year, .month, .day], from: Date())
-        comps.hour = 23; comps.minute = 59; comps.second = 59
-        return cal.date(from: comps) ?? Date()
-    }()
+    @Published var reportEndTime: Date = Date()
     @Published var reportByApp: [ReportRow] = []
     @Published var reportByAppWindow: [ReportRow] = []
     @Published var reportByTag: [ReportRow] = []
@@ -399,9 +391,11 @@ final class ViewerViewModel: ObservableObject {
         )
 
         // By app (with inactive time)
+        // Cap the effective end at `now` so future time is never counted as inactive
         let byApp = Aggregations.totalsByAppName(segments: segments)
         let totalActiveSeconds = byApp.values.reduce(0.0, +)
-        let rangeDurationSeconds = reportEndTime.timeIntervalSince(reportStartTime)
+        let effectiveEnd = min(reportEndTime, Date())
+        let rangeDurationSeconds = max(0, effectiveEnd.timeIntervalSince(reportStartTime))
         let inactiveSeconds = max(0, rangeDurationSeconds - totalActiveSeconds)
 
         // Percentages relative to full range duration
