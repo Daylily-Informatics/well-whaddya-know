@@ -41,11 +41,11 @@ struct TagList: AsyncParsableCommand {
                 var dict: [String: Any] = [
                     "tag_id": tag.tagId,
                     "name": tag.name,
-                    "created": formatLocalTimestamp(tag.createdTsUs),
+                    "created": formatLocalTimestamp(tag.createdTsUs, timeZone: options.resolvedTimezone),
                     "is_retired": tag.isRetired
                 ]
                 if let retired = tag.retiredTsUs {
-                    dict["retired"] = formatLocalTimestamp(retired)
+                    dict["retired"] = formatLocalTimestamp(retired, timeZone: options.resolvedTimezone)
                 }
                 return dict
             }
@@ -86,8 +86,8 @@ struct TagApply: AsyncParsableCommand {
     var tag: String
 
     mutating func run() async throws {
-        let startTsUs = try parseISODate(from)
-        let endTsUs = try parseISODate(to)
+        let startTsUs = try parseISODate(from, timeZone: options.resolvedTimezone)
+        let endTsUs = try parseISODate(to, timeZone: options.resolvedTimezone)
 
         guard startTsUs < endTsUs else {
             printError("Start date must be before end date")
@@ -135,8 +135,8 @@ struct TagRemove: AsyncParsableCommand {
     var tag: String
 
     mutating func run() async throws {
-        let startTsUs = try parseISODate(from)
-        let endTsUs = try parseISODate(to)
+        let startTsUs = try parseISODate(from, timeZone: options.resolvedTimezone)
+        let endTsUs = try parseISODate(to, timeZone: options.resolvedTimezone)
 
         guard startTsUs < endTsUs else {
             printError("Start date must be before end date")

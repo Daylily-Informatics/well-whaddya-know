@@ -17,8 +17,15 @@ public enum AgentError: Error {
 public actor Agent: SensorEventHandler {
     
     // MARK: - Configuration
-    
+
     public static let agentVersion = "1.0.0"
+
+    /// Bundle IDs to exclude from activity tracking.
+    /// The app should not track itself or its own agent.
+    static let excludedBundleIds: Set<String> = [
+        "com.daylily.wellwhaddyaknow",
+        "com.daylily.wellwhaddyaknow.agent",
+    ]
     
     // MARK: - State (internal for extensions)
 

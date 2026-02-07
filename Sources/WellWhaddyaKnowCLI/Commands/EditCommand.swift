@@ -37,8 +37,8 @@ struct EditDelete: AsyncParsableCommand {
 
     mutating func run() async throws {
         // Validate date range
-        let startTsUs = try parseISODate(from)
-        let endTsUs = try parseISODate(to)
+        let startTsUs = try parseISODate(from, timeZone: options.resolvedTimezone)
+        let endTsUs = try parseISODate(to, timeZone: options.resolvedTimezone)
 
         guard startTsUs < endTsUs else {
             printError("Start date must be before end date")
@@ -96,8 +96,8 @@ struct EditAdd: AsyncParsableCommand {
 
     mutating func run() async throws {
         // Validate date range
-        let startTsUs = try parseISODate(from)
-        let endTsUs = try parseISODate(to)
+        let startTsUs = try parseISODate(from, timeZone: options.resolvedTimezone)
+        let endTsUs = try parseISODate(to, timeZone: options.resolvedTimezone)
 
         guard startTsUs < endTsUs else {
             printError("Start date must be before end date")

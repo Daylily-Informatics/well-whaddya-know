@@ -105,6 +105,9 @@ extension Agent {
         // Only emit activity events when working (SPEC.md 5.4)
         guard state.isWorking else { return }
 
+        // Don't track our own app or agent — they aren't user work
+        guard !Self.excludedBundleIds.contains(bundleId) else { return }
+
         let timestampUs = Int64(timestamp.timeIntervalSince1970 * 1_000_000)
 
         // Ensure app exists in dimension table
@@ -177,6 +180,9 @@ extension Agent {
         // Get current frontmost app (sensor is guaranteed to exist after start())
         guard let foregroundAppSensor = foregroundAppSensor,
               let appInfo = foregroundAppSensor.getCurrentFrontmostApp() else { return }
+
+        // Don't track our own app or agent
+        guard !Self.excludedBundleIds.contains(appInfo.bundleId) else { return }
 
         let appId = try eventWriter.ensureApplication(
             bundleId: appInfo.bundleId,
