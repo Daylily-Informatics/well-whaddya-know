@@ -19,6 +19,7 @@ struct WWK: AsyncParsableCommand {
             Export.self,
             Edit.self,
             Tag.self,
+            Agent.self,
             Doctor.self,
             DB.self,
         ],
