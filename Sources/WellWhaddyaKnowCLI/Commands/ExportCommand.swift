@@ -39,8 +39,9 @@ struct Export: AsyncParsableCommand {
     mutating func run() async throws {
         let path = options.db ?? getDefaultDatabasePath()
 
-        let startTsUs = try parseISODate(from)
-        let endTsUs = try parseISODate(to)
+        let tz = options.resolvedTimezone
+        let startTsUs = try parseISODate(from, timeZone: tz)
+        let endTsUs = try parseISODate(to, timeZone: tz)
 
         guard startTsUs < endTsUs else {
             printError("Start date must be before end date")
@@ -52,7 +53,7 @@ struct Export: AsyncParsableCommand {
         let identity = try reader.loadIdentity()
 
         // Get timezone offset
-        let tzOffsetSeconds = TimeZone.current.secondsFromGMT()
+        let tzOffsetSeconds = tz.secondsFromGMT()
 
         let output: String
         switch format {

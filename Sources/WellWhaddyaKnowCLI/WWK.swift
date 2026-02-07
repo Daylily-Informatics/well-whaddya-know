@@ -36,6 +36,32 @@ struct GlobalOptions: ParsableArguments {
 
     @Flag(name: .long, help: "Output in JSON format")
     var json: Bool = false
+
+    @Option(name: .long, help: "Display timezone (IANA identifier, e.g. America/New_York). Default: GUI preference or system)")
+    var timezone: String?
+
+    /// Resolve the effective display timezone.
+    /// Priority: --timezone flag → UserDefaults preference → system timezone.
+    var resolvedTimezone: TimeZone {
+        if let id = timezone, let tz = TimeZone(identifier: id) {
+            return tz
+        }
+        // Fall back to the same UserDefaults key the GUI uses
+        let key = "com.daylily.wellwhaddyaknow.displayTimezone"
+        if let id = UserDefaults.standard.string(forKey: key),
+           !id.isEmpty,
+           let tz = TimeZone(identifier: id) {
+            return tz
+        }
+        return TimeZone.current
+    }
+
+    /// A Calendar configured with the resolved display timezone.
+    var resolvedCalendar: Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = resolvedTimezone
+        return cal
+    }
 }
 
 // MARK: - Helpers
@@ -65,8 +91,9 @@ func getDefaultDatabasePath() -> String {
         .path
 }
 
-/// Parse ISO 8601 date string to timestamp in microseconds
-func parseISODate(_ string: String) throws -> Int64 {
+/// Parse ISO 8601 date string to timestamp in microseconds.
+/// The `timeZone` parameter is used when parsing date-only strings (e.g. "2024-01-15").
+func parseISODate(_ string: String, timeZone: TimeZone = .current) throws -> Int64 {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     
@@ -80,10 +107,10 @@ func parseISODate(_ string: String) throws -> Int64 {
         return Int64(date.timeIntervalSince1970 * 1_000_000)
     }
     
-    // Try date-only format
+    // Try date-only format (interpreted in the given timezone)
     let dateFormatter = DateFormatter()
     dateFormatter.dateFormat = "yyyy-MM-dd"
-    dateFormatter.timeZone = TimeZone.current
+    dateFormatter.timeZone = timeZone
     if let date = dateFormatter.date(from: string) {
         return Int64(date.timeIntervalSince1970 * 1_000_000)
     }
@@ -101,12 +128,12 @@ func formatDuration(_ seconds: Double) -> String {
     return "\(minutes)m"
 }
 
-/// Format timestamp to local ISO string
-func formatLocalTimestamp(_ tsUs: Int64) -> String {
+/// Format timestamp to ISO string in the given timezone.
+func formatLocalTimestamp(_ tsUs: Int64, timeZone: TimeZone = .current) -> String {
     let date = Date(timeIntervalSince1970: Double(tsUs) / 1_000_000.0)
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime]
-    formatter.timeZone = TimeZone.current
+    formatter.timeZone = timeZone
     return formatter.string(from: date)
 }
 

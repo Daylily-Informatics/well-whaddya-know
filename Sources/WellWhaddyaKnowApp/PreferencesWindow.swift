@@ -61,6 +61,24 @@ final class PreferencesViewModel: ObservableObject {
     @Published var defaultIncludeTitles: Bool = true
     @Published var isRefreshing: Bool = false
 
+    /// Display timezone identifier. Empty string means "use system default".
+    @Published var displayTimezoneId: String = "" {
+        didSet {
+            UserDefaults.standard.set(
+                displayTimezoneId.isEmpty ? nil : displayTimezoneId,
+                forKey: Self.displayTimezoneKey
+            )
+        }
+    }
+
+    /// The UserDefaults key for the display timezone preference.
+    static let displayTimezoneKey = "com.daylily.wellwhaddyaknow.displayTimezone"
+
+    /// Resolved display timezone (falls back to system when not set or invalid).
+    var displayTimezone: TimeZone {
+        DisplayTimezoneHelper.preferred
+    }
+
     // Diagnostics properties
     @Published var agentPID: Int? = nil
     @Published var registrationStatusText: String = "Unknown"
@@ -86,6 +104,9 @@ final class PreferencesViewModel: ObservableObject {
     func refreshStatus() async {
         isRefreshing = true
         defer { isRefreshing = false }
+
+        // Load display timezone preference
+        displayTimezoneId = UserDefaults.standard.string(forKey: Self.displayTimezoneKey) ?? ""
 
         // Get data path and app group status
         let appGroupId = "group.com.daylily.wellwhaddyaknow"
@@ -460,6 +481,7 @@ final class PreferencesViewModel: ObservableObject {
         let fmt = DateFormatter()
         fmt.dateStyle = .medium
         fmt.timeStyle = .medium
+        fmt.timeZone = DisplayTimezoneHelper.preferred
         return fmt.string(from: date)
     }
 
@@ -522,9 +544,53 @@ final class PreferencesViewModel: ObservableObject {
 
 struct GeneralPreferencesView: View {
     @ObservedObject var viewModel: PreferencesViewModel
+    @State private var timezoneSearch: String = ""
+
+    /// Common timezone identifiers, grouped for easy browsing.
+    private static let commonTimezones: [String] = {
+        // Start with a curated set, then fall back to full list.
+        let curated = [
+            "US/Eastern", "US/Central", "US/Mountain", "US/Pacific", "US/Alaska", "US/Hawaii",
+            "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+            "America/Anchorage", "America/Phoenix", "America/Toronto", "America/Vancouver",
+            "Europe/London", "Europe/Berlin", "Europe/Paris", "Europe/Amsterdam",
+            "Europe/Zurich", "Europe/Moscow",
+            "Asia/Tokyo", "Asia/Shanghai", "Asia/Kolkata", "Asia/Singapore",
+            "Asia/Dubai", "Asia/Hong_Kong",
+            "Australia/Sydney", "Australia/Melbourne", "Australia/Perth",
+            "Pacific/Auckland", "Pacific/Honolulu",
+            "UTC",
+        ]
+        // Merge curated + all known identifiers, dedup, sort.
+        let all = Set(curated + TimeZone.knownTimeZoneIdentifiers)
+        return all.sorted()
+    }()
+
+    private var filteredTimezones: [String] {
+        if timezoneSearch.isEmpty { return Self.commonTimezones }
+        let q = timezoneSearch.lowercased()
+        return Self.commonTimezones.filter { $0.lowercased().contains(q) }
+    }
 
     var body: some View {
         Form {
+            Section("Display Timezone") {
+                Picker("Timezone:", selection: $viewModel.displayTimezoneId) {
+                    Text("System Default (\(TimeZone.current.identifier))").tag("")
+                    ForEach(filteredTimezones, id: \.self) { tzId in
+                        Text(tzId).tag(tzId)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+
+                TextField("Filter timezones…", text: $timezoneSearch)
+                    .textFieldStyle(.roundedBorder)
+
+                Text("Current: \(DisplayTimezoneHelper.displayLabel)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             Section("Export Defaults") {
                 Picker("Default format:", selection: $viewModel.defaultExportFormat) {
                     Text("CSV").tag("csv")
@@ -838,5 +904,50 @@ struct AboutPreferencesView: View {
                 .foregroundColor(.secondary)
         }
         .padding()
+    }
+}
+
+
+// MARK: - Display Timezone Helper
+
+/// Shared helper for resolving the user's preferred display timezone.
+/// Used by ViewerWindow, PreferencesWindow, TodayTotalCalculator, and exports.
+enum DisplayTimezoneHelper {
+    /// UserDefaults key (same as PreferencesViewModel.displayTimezoneKey).
+    static let key = "com.daylily.wellwhaddyaknow.displayTimezone"
+
+    /// Resolved preferred timezone. Falls back to system timezone if unset or invalid.
+    static var preferred: TimeZone {
+        if let id = UserDefaults.standard.string(forKey: key),
+           !id.isEmpty,
+           let tz = TimeZone(identifier: id) {
+            return tz
+        }
+        return TimeZone.current
+    }
+
+    /// A Calendar configured with the preferred display timezone.
+    static var calendar: Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = preferred
+        return cal
+    }
+
+    /// Human-readable label, e.g. "America/New_York (UTC-5)".
+    static var displayLabel: String {
+        let tz = preferred
+        let offsetSeconds = tz.secondsFromGMT()
+        let hours = offsetSeconds / 3600
+        let minutes = abs(offsetSeconds % 3600) / 60
+        let offsetStr: String
+        if minutes == 0 {
+            offsetStr = "UTC\(hours >= 0 ? "+" : "")\(hours)"
+        } else {
+            offsetStr = "UTC\(hours >= 0 ? "+" : "")\(hours):\(String(format: "%02d", minutes))"
+        }
+        if tz.identifier == TimeZone.current.identifier {
+            return "\(tz.identifier) (\(offsetStr)) — System"
+        }
+        return "\(tz.identifier) (\(offsetStr))"
     }
 }

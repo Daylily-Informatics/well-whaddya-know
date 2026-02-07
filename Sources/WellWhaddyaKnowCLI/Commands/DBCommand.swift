@@ -80,10 +80,10 @@ struct DBInfo: AsyncParsableCommand {
                 ]
             ]
             if let earliest = dateRange.earliest {
-                output["earliest_event"] = formatLocalTimestamp(earliest)
+                output["earliest_event"] = formatLocalTimestamp(earliest, timeZone: options.resolvedTimezone)
             }
             if let latest = dateRange.latest {
-                output["latest_event"] = formatLocalTimestamp(latest)
+                output["latest_event"] = formatLocalTimestamp(latest, timeZone: options.resolvedTimezone)
             }
             if let data = try? JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys]),
                let json = String(data: data, encoding: .utf8) {
@@ -103,8 +103,8 @@ struct DBInfo: AsyncParsableCommand {
             print("")
             if let earliest = dateRange.earliest, let latest = dateRange.latest {
                 print("Date Range:")
-                print("  Earliest: \(formatLocalTimestamp(earliest))")
-                print("  Latest: \(formatLocalTimestamp(latest))")
+                print("  Earliest: \(formatLocalTimestamp(earliest, timeZone: options.resolvedTimezone))")
+                print("  Latest: \(formatLocalTimestamp(latest, timeZone: options.resolvedTimezone))")
             } else {
                 print("Date Range: No events recorded")
             }

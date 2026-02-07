@@ -96,47 +96,47 @@ enum DateRangePreset: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Compute (startOfDay, endOfDay) for this preset relative to now.
+    /// Compute (startOfDay, endOfDay) for this preset relative to now,
+    /// using the user's preferred display timezone.
     func dateRange() -> (start: Date, end: Date)? {
-        let calendar = Calendar.current
+        let calendar = DisplayTimezoneHelper.calendar
         let now = Date()
 
         switch self {
         case .today:
-            return (calendar.startOfDay(for: now), endOfDay(now))
+            return (calendar.startOfDay(for: now), Self.endOfDay(now, calendar: calendar))
         case .yesterday:
             let yesterday = calendar.date(byAdding: .day, value: -1, to: now)!
-            return (calendar.startOfDay(for: yesterday), endOfDay(yesterday))
+            return (calendar.startOfDay(for: yesterday), Self.endOfDay(yesterday, calendar: calendar))
         case .thisWeek:
             let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? now
-            return (weekStart, endOfDay(now))
+            return (weekStart, Self.endOfDay(now, calendar: calendar))
         case .last7Days:
             let start = calendar.date(byAdding: .day, value: -6, to: now)!
-            return (calendar.startOfDay(for: start), endOfDay(now))
+            return (calendar.startOfDay(for: start), Self.endOfDay(now, calendar: calendar))
         case .thisMonth:
             let monthStart = calendar.dateInterval(of: .month, for: now)?.start ?? now
-            return (monthStart, endOfDay(now))
+            return (monthStart, Self.endOfDay(now, calendar: calendar))
         case .last30Days:
             let start = calendar.date(byAdding: .day, value: -29, to: now)!
-            return (calendar.startOfDay(for: start), endOfDay(now))
+            return (calendar.startOfDay(for: start), Self.endOfDay(now, calendar: calendar))
         case .last12Months:
             let start = calendar.date(byAdding: .month, value: -12, to: now)!
-            return (calendar.startOfDay(for: start), endOfDay(now))
+            return (calendar.startOfDay(for: start), Self.endOfDay(now, calendar: calendar))
         case .yearToDate:
             var comps = calendar.dateComponents([.year], from: now)
             comps.month = 1; comps.day = 1
             let yearStart = calendar.date(from: comps) ?? now
-            return (yearStart, endOfDay(now))
+            return (yearStart, Self.endOfDay(now, calendar: calendar))
         case .custom:
             return nil
         }
     }
 
-    private func endOfDay(_ date: Date) -> Date {
-        let cal = Calendar.current
-        var comps = cal.dateComponents([.year, .month, .day], from: date)
+    private static func endOfDay(_ date: Date, calendar: Calendar) -> Date {
+        var comps = calendar.dateComponents([.year, .month, .day], from: date)
         comps.hour = 23; comps.minute = 59; comps.second = 59
-        return cal.date(from: comps) ?? date
+        return calendar.date(from: comps) ?? date
     }
 }
 
@@ -144,9 +144,9 @@ enum DateRangePreset: String, CaseIterable, Identifiable {
 @MainActor
 final class ViewerViewModel: ObservableObject {
     @Published var selectedDate: Date = Date()
-    @Published var startTime: Date = Calendar.current.startOfDay(for: Date())
+    @Published var startTime: Date = DisplayTimezoneHelper.calendar.startOfDay(for: Date())
     @Published var endTime: Date = {
-        let cal = Calendar.current
+        let cal = DisplayTimezoneHelper.calendar
         var comps = cal.dateComponents([.year, .month, .day], from: Date())
         comps.hour = 23; comps.minute = 59; comps.second = 59
         return cal.date(from: comps) ?? Date()
@@ -159,9 +159,9 @@ final class ViewerViewModel: ObservableObject {
 
     // Reports tab state
     @Published var reportPreset: DateRangePreset = .today
-    @Published var reportStartTime: Date = Calendar.current.startOfDay(for: Date())
+    @Published var reportStartTime: Date = DisplayTimezoneHelper.calendar.startOfDay(for: Date())
     @Published var reportEndTime: Date = {
-        let cal = Calendar.current
+        let cal = DisplayTimezoneHelper.calendar
         var comps = cal.dateComponents([.year, .month, .day], from: Date())
         comps.hour = 23; comps.minute = 59; comps.second = 59
         return cal.date(from: comps) ?? Date()
@@ -175,7 +175,7 @@ final class ViewerViewModel: ObservableObject {
 
     /// Reset time pickers to full-day range for the given date
     func resetTimeRange(for date: Date) {
-        let calendar = Calendar.current
+        let calendar = DisplayTimezoneHelper.calendar
         startTime = calendar.startOfDay(for: date)
         var comps = calendar.dateComponents([.year, .month, .day], from: date)
         comps.hour = 23; comps.minute = 59; comps.second = 59
@@ -398,14 +398,30 @@ final class ViewerViewModel: ObservableObject {
             endTsUs: endTsUs
         )
 
-        // By app
+        // By app (with inactive time)
         let byApp = Aggregations.totalsByAppName(segments: segments)
-        let totalApp = byApp.values.reduce(0.0, +)
-        reportByApp = byApp
+        let totalActiveSeconds = byApp.values.reduce(0.0, +)
+        let rangeDurationSeconds = reportEndTime.timeIntervalSince(reportStartTime)
+        let inactiveSeconds = max(0, rangeDurationSeconds - totalActiveSeconds)
+
+        // Percentages relative to full range duration
+        var appRows = byApp
             .map { ReportRow(appName: $0.key, windowTitle: nil, tagName: nil,
                              totalSeconds: $0.value,
-                             percentage: totalApp > 0 ? $0.value / totalApp * 100 : 0) }
+                             percentage: rangeDurationSeconds > 0 ? $0.value / rangeDurationSeconds * 100 : 0) }
             .sorted { $0.totalSeconds > $1.totalSeconds }
+
+        // Append inactive row
+        if inactiveSeconds > 0 {
+            appRows.append(ReportRow(
+                appName: "Inactive",
+                windowTitle: nil,
+                tagName: nil,
+                totalSeconds: inactiveSeconds,
+                percentage: rangeDurationSeconds > 0 ? inactiveSeconds / rangeDurationSeconds * 100 : 0
+            ))
+        }
+        reportByApp = appRows
 
         // By app + window
         let byAppWin = Aggregations.totalsByAppNameAndWindow(segments: segments)
@@ -573,7 +589,7 @@ struct DateNavigationBar: View {
                     Image(systemName: "chevron.right")
                 }
                 .buttonStyle(.borderless)
-                .disabled(Calendar.current.isDateInToday(selectedDate))
+                .disabled(DisplayTimezoneHelper.calendar.isDateInToday(selectedDate))
 
                 Spacer()
 
@@ -581,7 +597,7 @@ struct DateNavigationBar: View {
                     selectedDate = Date()
                     onDateChange(Date())
                 }
-                .disabled(Calendar.current.isDateInToday(selectedDate))
+                .disabled(DisplayTimezoneHelper.calendar.isDateInToday(selectedDate))
             }
 
             // Row 2: Time range pickers + Apply
@@ -615,14 +631,14 @@ struct DateNavigationBar: View {
     }
 
     private func previousDay() {
-        if let newDate = Calendar.current.date(byAdding: .day, value: -1, to: selectedDate) {
+        if let newDate = DisplayTimezoneHelper.calendar.date(byAdding: .day, value: -1, to: selectedDate) {
             selectedDate = newDate
             onDateChange(newDate)
         }
     }
 
     private func nextDay() {
-        if let newDate = Calendar.current.date(byAdding: .day, value: 1, to: selectedDate) {
+        if let newDate = DisplayTimezoneHelper.calendar.date(byAdding: .day, value: 1, to: selectedDate) {
             selectedDate = newDate
             onDateChange(newDate)
         }
@@ -810,6 +826,7 @@ struct TimelineRow: View {
     private var timeRange: String {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
+        formatter.timeZone = DisplayTimezoneHelper.preferred
         return "\(formatter.string(from: segment.startTime)) – \(formatter.string(from: segment.endTime))"
     }
 
@@ -1144,6 +1161,16 @@ struct ReportsTabView: View {
 
             Divider()
 
+            // Timezone indicator
+            HStack {
+                Spacer()
+                Label(DisplayTimezoneHelper.displayLabel, systemImage: "globe")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal)
+            .padding(.top, 4)
+
             HStack {
                 DatePicker("From:", selection: $viewModel.reportStartTime,
                            displayedComponents: [.date, .hourAndMinute])
@@ -1194,7 +1221,7 @@ struct ReportsTabView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ReportsChartView(data: data, grouping: selectedGrouping)
-                        .frame(height: 260)
+                        .frame(minHeight: 280, idealHeight: 320)
                         .padding()
 
                     Divider()
@@ -1260,19 +1287,120 @@ struct ReportsTabView: View {
 struct ReportsChartView: View {
     let data: [ReportRow]
     let grouping: ReportGrouping
+    @State private var hoveredLabel: String?
+
+    /// Max hours across visible rows — used to decide whether a bar is wide enough for annotation
+    private var maxHours: Double {
+        data.prefix(15).map { $0.totalSeconds / 3600.0 }.max() ?? 1.0
+    }
 
     var body: some View {
-        Chart {
-            ForEach(Array(data.prefix(15))) { row in
-                BarMark(
-                    x: .value("Hours", row.totalSeconds / 3600.0),
-                    y: .value("Label", chartLabel(for: row))
-                )
-                .foregroundStyle(by: .value("Category", chartColor(for: row)))
+        VStack(spacing: 4) {
+            Chart {
+                ForEach(Array(data.prefix(15))) { row in
+                    let label = chartLabel(for: row)
+                    let hours = row.totalSeconds / 3600.0
+                    BarMark(
+                        x: .value("Hours", hours),
+                        y: .value("Label", label)
+                    )
+                    .foregroundStyle(by: .value("Category", chartColor(for: row)))
+                    .opacity(hoveredLabel == nil || hoveredLabel == label ? 1.0 : 0.4)
+                    .annotation(position: .trailing, spacing: 4) {
+                        // Only show hours label when bar is ≥10% of the widest bar
+                        if hours / maxHours >= 0.10 {
+                            Text(String(format: "%.2fh", hours))
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
+                // Hover rule line
+                if let hLabel = hoveredLabel {
+                    RuleMark(y: .value("Label", hLabel))
+                        .foregroundStyle(.gray.opacity(0.3))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                }
+            }
+            .chartXAxisLabel("Hours")
+            .chartXAxis {
+                AxisMarks(position: .bottom)
+            }
+            .chartYAxis {
+                AxisMarks(position: .leading)
+            }
+            .chartLegend(.hidden)
+            .chartOverlay { proxy in
+                GeometryReader { _ in
+                    Rectangle()
+                        .fill(.clear)
+                        .contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let location):
+                                // location is already in the chart proxy's coordinate space
+                                if let label: String = proxy.value(atY: location.y) {
+                                    hoveredLabel = label
+                                } else {
+                                    hoveredLabel = nil
+                                }
+                            case .ended:
+                                hoveredLabel = nil
+                            }
+                        }
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                // Hover tooltip
+                if let hLabel = hoveredLabel,
+                   let row = data.prefix(15).first(where: { chartLabel(for: $0) == hLabel }) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(hLabel)
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .lineLimit(1)
+                        Text("\(row.formattedDuration)  (\(String(format: "%.1f%%", row.percentage)))")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(6)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
+                    .padding(8)
+                    .transition(.opacity)
+                }
+            }
+
+            // Legend below the chart
+            chartLegend
+        }
+    }
+
+    @ViewBuilder
+    private var chartLegend: some View {
+        let categories = Array(Set(data.prefix(15).map { chartColor(for: $0) })).sorted()
+        let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: min(categories.count, 4))
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 4) {
+            ForEach(categories, id: \.self) { cat in
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(colorForCategory(cat, in: categories))
+                        .frame(width: 8, height: 8)
+                    Text(cat)
+                        .font(.caption2)
+                        .lineLimit(1)
+                }
             }
         }
-        .chartXAxisLabel("Hours")
-        .chartLegend(position: .bottom)
+        .padding(.horizontal)
+        .padding(.bottom, 4)
+    }
+
+    private func colorForCategory(_ category: String, in categories: [String]) -> Color {
+        if category == "Inactive" { return .gray }
+        let palette: [Color] = [.blue, .green, .orange, .purple, .red, .cyan, .yellow, .pink, .mint, .indigo, .brown, .teal]
+        guard let idx = categories.firstIndex(of: category) else { return .gray }
+        return palette[idx % palette.count]
     }
 
     private func chartLabel(for row: ReportRow) -> String {

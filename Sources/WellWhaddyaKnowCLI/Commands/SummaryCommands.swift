@@ -34,8 +34,9 @@ struct Summary: AsyncParsableCommand {
     mutating func run() async throws {
         let path = options.db ?? getDefaultDatabasePath()
 
-        let startTsUs = try parseISODate(from)
-        let endTsUs = try parseISODate(to)
+        let tz = options.resolvedTimezone
+        let startTsUs = try parseISODate(from, timeZone: tz)
+        let endTsUs = try parseISODate(to, timeZone: tz)
 
         guard startTsUs < endTsUs else {
             printError("Start date must be before end date")
@@ -54,7 +55,7 @@ struct Summary: AsyncParsableCommand {
         case .tag:
             totals = Aggregations.totalsByTag(segments: segments)
         case .day:
-            totals = Aggregations.totalsByDay(segments: segments, timeZone: .current)
+            totals = Aggregations.totalsByDay(segments: segments, timeZone: tz)
         }
 
         if options.json {
@@ -92,7 +93,7 @@ struct Today: AsyncParsableCommand {
     mutating func run() async throws {
         let path = options.db ?? getDefaultDatabasePath()
 
-        let calendar = Calendar.current
+        let calendar = options.resolvedCalendar
         let now = Date()
         let startOfDay = calendar.startOfDay(for: now)
         let startTsUs = Int64(startOfDay.timeIntervalSince1970 * 1_000_000)
@@ -142,7 +143,7 @@ struct Week: AsyncParsableCommand {
     mutating func run() async throws {
         let path = options.db ?? getDefaultDatabasePath()
 
-        let calendar = Calendar.current
+        let calendar = options.resolvedCalendar
         let now = Date()
 
         // Get start of week (Sunday or Monday depending on locale)
@@ -157,7 +158,7 @@ struct Week: AsyncParsableCommand {
         let reader = try DatabaseReader(path: path)
         let segments = try reader.buildTimeline(startTsUs: startTsUs, endTsUs: endTsUs)
         let total = Aggregations.totalWorkingTime(segments: segments)
-        let byDay = Aggregations.totalsByDay(segments: segments, timeZone: .current)
+        let byDay = Aggregations.totalsByDay(segments: segments, timeZone: options.resolvedTimezone)
 
         if options.json {
             let output: [String: Any] = [

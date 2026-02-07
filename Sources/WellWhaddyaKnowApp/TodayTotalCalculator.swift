@@ -48,7 +48,7 @@ final class TodayTotalCalculator {
         }
 
         // Calculate today's time range in microseconds
-        let calendar = Calendar.current
+        let calendar = DisplayTimezoneHelper.calendar
         let now = Date()
         guard let startOfDay = calendar.startOfDay(for: now) as Date? else {
             return 0.0
