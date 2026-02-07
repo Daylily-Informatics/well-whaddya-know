@@ -139,12 +139,16 @@ struct SensorInitializationTests {
         let sensor = AccessibilitySensor(handler: handler)
 
         // Get title for an invalid PID (should return an error status)
-        let (title, status) = sensor.getCurrentTitle(for: -1)
+        let (title, status, axErrorCode) = sensor.getCurrentTitle(for: -1)
 
         // Should not crash, and should return some status
         // Will likely be noPermission in test env, or error for invalid PID
         #expect(title == nil || title != nil)  // Either is acceptable
         #expect([TitleCaptureStatus.ok, .noPermission, .notSupported, .noWindow, .error].contains(status))
+        // axErrorCode should be nil for .ok/.noPermission, or a raw AXError code otherwise
+        if status == .ok || status == .noPermission {
+            #expect(axErrorCode == nil)
+        }
     }
 }
 

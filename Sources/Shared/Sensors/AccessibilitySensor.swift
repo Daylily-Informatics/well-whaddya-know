@@ -49,38 +49,41 @@ public final class AccessibilitySensor: @unchecked Sendable {
     
     // MARK: - Title Capture
     
-    /// Get the current window title for a given PID
-    public func getCurrentTitle(for pid: pid_t) -> (title: String?, status: TitleCaptureStatus) {
+    /// Get the current window title for a given PID.
+    /// Returns the raw `AXError.rawValue` when the status is not `.ok` for diagnostic logging.
+    public func getCurrentTitle(for pid: pid_t) -> (title: String?, status: TitleCaptureStatus, axErrorCode: Int32?) {
         guard isAccessibilityGranted() else {
-            return (nil, .noPermission)
+            return (nil, .noPermission, nil)
         }
-        
+
         let app = AXUIElementCreateApplication(pid)
-        
+
         var focusedWindow: CFTypeRef?
         let windowResult = AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &focusedWindow)
-        
+
         guard windowResult == .success, let window = focusedWindow else {
+            let code = windowResult.rawValue
             if windowResult == .noValue || windowResult == .attributeUnsupported {
-                return (nil, .noWindow)
+                return (nil, .noWindow, code)
             }
             if windowResult == .apiDisabled || windowResult == .notImplemented {
-                return (nil, .notSupported)
+                return (nil, .notSupported, code)
             }
-            return (nil, .error)
+            return (nil, .error, code)
         }
-        
+
         var titleValue: CFTypeRef?
         let titleResult = AXUIElementCopyAttributeValue(window as! AXUIElement, kAXTitleAttribute as CFString, &titleValue)
-        
+
         guard titleResult == .success, let title = titleValue as? String else {
+            let code = titleResult.rawValue
             if titleResult == .noValue {
-                return (nil, .noWindow)
+                return (nil, .noWindow, code)
             }
-            return (nil, .error)
+            return (nil, .error, code)
         }
-        
-        return (title, .ok)
+
+        return (title, .ok, nil)
     }
     
     // MARK: - Observation
@@ -196,7 +199,7 @@ public final class AccessibilitySensor: @unchecked Sendable {
 
         let timestamp = Date()
         let monotonicNs = getMonotonicTimeNs()
-        let (title, status) = getCurrentTitle(for: observedPid)
+        let (title, status, axErrorCode) = getCurrentTitle(for: observedPid)
 
         // Only emit if title changed
         if title != lastKnownTitle || source == .startupProbe {
@@ -209,7 +212,8 @@ public final class AccessibilitySensor: @unchecked Sendable {
                     status: status,
                     source: source,
                     timestamp: timestamp,
-                    monotonicNs: monotonicNs
+                    monotonicNs: monotonicNs,
+                    axErrorCode: axErrorCode
                 ))
             }
         }

@@ -119,7 +119,7 @@ extension Agent {
         currentAppName = displayName
 
         // Immediately capture window title via Accessibility API
-        let (titleId, titleStatus) = try captureCurrentTitle(for: pid, timestampUs: timestampUs)
+        let (titleId, titleStatus, axErrCode) = try captureCurrentTitle(for: pid, timestampUs: timestampUs)
 
         // Start observing title changes for the new foreground PID
         if let axSensor = accessibilitySensor {
@@ -137,7 +137,8 @@ extension Agent {
             titleId: titleId,
             titleStatus: titleStatus,
             reason: ActivityEventReason.appActivated,
-            isWorking: true
+            isWorking: true,
+            axErrorCode: axErrCode
         )
     }
     
@@ -188,7 +189,7 @@ extension Agent {
         currentAppName = appInfo.displayName
 
         // Immediately capture window title via Accessibility API
-        let (titleId, titleStatus) = try captureCurrentTitle(for: appInfo.pid, timestampUs: timestampUs)
+        let (titleId, titleStatus, axErrCode) = try captureCurrentTitle(for: appInfo.pid, timestampUs: timestampUs)
 
         // Start observing title changes for the frontmost PID
         if let axSensor = accessibilitySensor {
@@ -205,21 +206,22 @@ extension Agent {
             titleId: titleId,
             titleStatus: titleStatus,
             reason: ActivityEventReason.workingBegan,
-            isWorking: true
+            isWorking: true,
+            axErrorCode: axErrCode
         )
     }
 
     // MARK: - Title Capture Helper
 
     /// Capture the current window title for a PID using the Accessibility API.
-    /// Returns (titleId, titleStatus). Sets `currentWindowTitle` as a side effect.
-    private func captureCurrentTitle(for pid: pid_t, timestampUs: Int64) throws -> (Int64?, TitleStatus) {
+    /// Returns (titleId, titleStatus, axErrorCode). Sets `currentWindowTitle` as a side effect.
+    private func captureCurrentTitle(for pid: pid_t, timestampUs: Int64) throws -> (Int64?, TitleStatus, Int32?) {
         guard let axSensor = accessibilitySensor else {
             currentWindowTitle = nil
-            return (nil, .noWindow)
+            return (nil, .noWindow, nil)
         }
 
-        let (title, captureStatus) = axSensor.getCurrentTitle(for: pid)
+        let (title, captureStatus, axErrorCode) = axSensor.getCurrentTitle(for: pid)
 
         // Map TitleCaptureStatus → TitleStatus
         let titleStatus: TitleStatus
@@ -239,7 +241,7 @@ extension Agent {
             currentWindowTitle = nil
         }
 
-        return (titleId, titleStatus)
+        return (titleId, titleStatus, axErrorCode)
     }
 
     // MARK: - Title Change (SPEC.md Section 3.4)
@@ -250,7 +252,8 @@ extension Agent {
         status: TitleCaptureStatus,
         source: SensorSource,
         timestamp: Date,
-        monotonicNs: UInt64
+        monotonicNs: UInt64,
+        axErrorCode: Int32?
     ) async throws {
         // Only emit activity events when working (SPEC.md 5.4)
         guard state.isWorking else { return }
@@ -309,7 +312,8 @@ extension Agent {
             titleId: titleId,
             titleStatus: titleStatus,
             reason: reason,
-            isWorking: true
+            isWorking: true,
+            axErrorCode: axErrorCode
         )
     }
 

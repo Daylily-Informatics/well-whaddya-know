@@ -62,7 +62,8 @@ public enum SensorEvent: Sendable {
         status: TitleCaptureStatus,
         source: SensorSource,
         timestamp: Date,
-        monotonicNs: UInt64
+        monotonicNs: UInt64,
+        axErrorCode: Int32?
     )
 
     // Accessibility permission changes

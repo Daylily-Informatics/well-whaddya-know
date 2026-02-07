@@ -169,16 +169,18 @@ struct SensorEventTests {
             status: .ok,
             source: .workspaceNotification,
             timestamp: timestamp,
-            monotonicNs: 9999
+            monotonicNs: 9999,
+            axErrorCode: nil
         )
 
-        if case let .titleChanged(pid, title, status, source, ts, mono) = event {
+        if case let .titleChanged(pid, title, status, source, ts, mono, axErr) = event {
             #expect(pid == 1234)
             #expect(title == "My Window")
             #expect(status == .ok)
             #expect(source == .workspaceNotification)
             #expect(ts == timestamp)
             #expect(mono == 9999)
+            #expect(axErr == nil)
         } else {
             Issue.record("Event should be titleChanged")
         }
