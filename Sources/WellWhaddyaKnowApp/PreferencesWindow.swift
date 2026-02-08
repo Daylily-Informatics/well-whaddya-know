@@ -86,6 +86,7 @@ final class PreferencesViewModel: ObservableObject {
     @Published var agentEnabled: Bool = false
     @Published var requiresApproval: Bool = false
     @Published var isPlistMissing: Bool = false
+    @Published var isManagedByCLI: Bool = false
     @Published var socketPath: String = ""
     @Published var socketExists: Bool = false
     @Published var ipcConnected: Bool = false
@@ -132,7 +133,7 @@ final class PreferencesViewModel: ObservableObject {
         socketPath = getIPCSocketPath()
         socketExists = FileManager.default.fileExists(atPath: socketPath)
 
-        // Agent lifecycle (SMAppService)
+        // Agent lifecycle (SMAppService or CLI-managed)
         let lifecycle = AgentLifecycleManager.shared
         lifecycle.refreshStatus()
         registrationStatusText = lifecycle.statusDescription
@@ -140,6 +141,7 @@ final class PreferencesViewModel: ObservableObject {
         agentEnabled = lifecycle.isEnabled
         requiresApproval = lifecycle.requiresApproval
         isPlistMissing = lifecycle.isPlistMissing
+        isManagedByCLI = lifecycle.isManagedByCLI
 
         // Query agent via IPC for real status
         do {
@@ -707,7 +709,13 @@ struct DiagnosticsPreferencesView: View {
         ScrollView {
             Form {
                 Section("Agent Status") {
-                    if viewModel.isPlistMissing {
+                    if viewModel.isManagedByCLI {
+                        // CLI plist owns the launchd label
+                        diagRow("Managed by", ok: true, detail: "CLI plist (wwk agent install)")
+                        Text("SMAppService registration deferred — CLI plist takes precedence.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else if viewModel.isPlistMissing {
                         // Dev build: plist not in bundle, show neutral indicators
                         diagRow("Registered", ok: nil, detail: "N/A — dev build (no LaunchAgent plist)")
                         diagRow("Enabled", ok: nil, detail: "N/A — dev build")

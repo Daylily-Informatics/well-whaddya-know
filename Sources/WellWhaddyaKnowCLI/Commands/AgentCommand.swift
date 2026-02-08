@@ -133,9 +133,18 @@ struct AgentInstall: AsyncParsableCommand {
         try FileManager.default.createDirectory(
             atPath: launchAgentDir, withIntermediateDirectories: true
         )
+
+        // Bootout any existing registration for the label — this clears both:
+        //   1. A previously CLI-installed plist (bootout by plist path)
+        //   2. An SMAppService-managed registration (bootout by label)
+        // Either or both may exist; errors are non-fatal.
         if FileManager.default.fileExists(atPath: plistPath) {
             shell(["launchctl", "bootout", "gui/\(getuid())", plistPath])
         }
+        // Also bootout by label to clear SMAppService-managed registration
+        // that doesn't have a plist file in ~/Library/LaunchAgents/
+        shell(["launchctl", "bootout", "gui/\(getuid())/\(launchdLabel)"])
+
         let content = generatePlistContent(wwkdPath: wwkdPath)
         try content.write(toFile: plistPath, atomically: true, encoding: .utf8)
         let (code, _, err) = shell(["launchctl", "bootstrap", "gui/\(getuid())", plistPath])

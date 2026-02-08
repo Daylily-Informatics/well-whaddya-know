@@ -31,6 +31,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Clean up resources
         menuBarController?.stopPolling()
 
+        // If a CLI-installed plist manages the agent, don't kill it on GUI quit.
+        // launchd will keep it running (or restart it) independently of the app.
+        let cliPlistManaged = FileManager.default.fileExists(
+            atPath: AgentLifecycleManager.cliPlistPath
+        )
+        if cliPlistManaged {
+            return
+        }
+
         // Stop the background agent (wwkd) gracefully via SIGTERM.
         // The agent handles SIGTERM by stopping sensors, emitting agent_stop event,
         // closing the database, removing the IPC socket, and exiting.

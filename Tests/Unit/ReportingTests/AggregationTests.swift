@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // AggregationTests.swift - Tests for aggregation functions per SPEC.md Section 8.2
 
+import Foundation
 import Reporting
 import Testing
 import Timeline
@@ -135,6 +136,104 @@ struct AggregationTests {
         #expect(Aggregations.totalsByApplication(segments: segments).isEmpty)
         #expect(Aggregations.totalsByWindowTitle(segments: segments).isEmpty)
         #expect(Aggregations.totalsByTag(segments: segments).isEmpty)
+    }
+
+    // MARK: - Totals by Hour
+
+    /// Helper: create a timestamp for a specific hour:minute in UTC
+    private func tsUs(hour: Int, minute: Int = 0, second: Int = 0) -> Int64 {
+        // Use a fixed date: 2024-01-15 in UTC
+        // 2024-01-15 00:00:00 UTC = 1705276800
+        let baseEpoch: Int64 = 1_705_276_800
+        return (baseEpoch + Int64(hour * 3600 + minute * 60 + second)) * 1_000_000
+    }
+
+    @Test("totalsByHour groups single-hour segment correctly")
+    func testTotalsByHourSingleSegment() {
+        let tz = TimeZone(identifier: "UTC")!
+        // 30 minutes at hour 9 (09:00 – 09:30)
+        let segments = [
+            makeSegment(startTsUs: tsUs(hour: 9, minute: 0),
+                        endTsUs: tsUs(hour: 9, minute: 30),
+                        appName: "Safari")
+        ]
+        let result = Aggregations.totalsByHour(segments: segments, timeZone: tz, groupBy: .app)
+        #expect(result.count == 1)
+        #expect(result[0].hour == 9)
+        #expect(result[0].label == "Safari")
+        #expect(abs(result[0].seconds - 1800.0) < 0.01)
+    }
+
+    @Test("totalsByHour splits segment across hour boundary")
+    func testTotalsByHourCrossHour() {
+        let tz = TimeZone(identifier: "UTC")!
+        // 09:45 – 10:15 → 15 min in hour 9, 15 min in hour 10
+        let segments = [
+            makeSegment(startTsUs: tsUs(hour: 9, minute: 45),
+                        endTsUs: tsUs(hour: 10, minute: 15),
+                        appName: "Code")
+        ]
+        let result = Aggregations.totalsByHour(segments: segments, timeZone: tz, groupBy: .app)
+        #expect(result.count == 2)
+        let h9 = result.first(where: { $0.hour == 9 })!
+        let h10 = result.first(where: { $0.hour == 10 })!
+        #expect(abs(h9.seconds - 900.0) < 0.01)  // 15 min
+        #expect(abs(h10.seconds - 900.0) < 0.01) // 15 min
+    }
+
+    @Test("totalsByHour excludes unobserved gaps")
+    func testTotalsByHourExcludesGaps() {
+        let tz = TimeZone(identifier: "UTC")!
+        let segments = [
+            makeSegment(startTsUs: tsUs(hour: 9), endTsUs: tsUs(hour: 10),
+                        appName: "App", coverage: .observed),
+            makeSegment(startTsUs: tsUs(hour: 10), endTsUs: tsUs(hour: 11),
+                        appName: "Gap", coverage: .unobservedGap),
+        ]
+        let result = Aggregations.totalsByHour(segments: segments, timeZone: tz, groupBy: .app)
+        #expect(result.count == 1)
+        #expect(result[0].hour == 9)
+    }
+
+    @Test("totalsByHour groups by tag, multi-tag segment contributes to each")
+    func testTotalsByHourGroupByTag() {
+        let tz = TimeZone(identifier: "UTC")!
+        let segments = [
+            makeSegment(startTsUs: tsUs(hour: 14), endTsUs: tsUs(hour: 14, minute: 30),
+                        appName: "IDE", tags: ["billable", "dev"])
+        ]
+        let result = Aggregations.totalsByHour(segments: segments, timeZone: tz, groupBy: .tag)
+        #expect(result.count == 2)
+        for entry in result {
+            #expect(entry.hour == 14)
+            #expect(abs(entry.seconds - 1800.0) < 0.01)
+        }
+        let labels = Set(result.map { $0.label })
+        #expect(labels.contains("billable"))
+        #expect(labels.contains("dev"))
+    }
+
+    @Test("totalsByHour empty segments returns empty")
+    func testTotalsByHourEmpty() {
+        let tz = TimeZone(identifier: "UTC")!
+        let result = Aggregations.totalsByHour(segments: [], timeZone: tz, groupBy: .app)
+        #expect(result.isEmpty)
+    }
+
+    @Test("totalsByHour appWindow grouping")
+    func testTotalsByHourAppWindow() {
+        let tz = TimeZone(identifier: "UTC")!
+        let segments = [
+            makeSegment(startTsUs: tsUs(hour: 8), endTsUs: tsUs(hour: 8, minute: 20),
+                        appName: "Xcode", title: "Project.swift"),
+            makeSegment(startTsUs: tsUs(hour: 8, minute: 20), endTsUs: tsUs(hour: 8, minute: 40),
+                        appName: "Xcode", title: "Tests.swift"),
+        ]
+        let result = Aggregations.totalsByHour(segments: segments, timeZone: tz, groupBy: .appWindow)
+        #expect(result.count == 2)
+        let labels = Set(result.map { $0.label })
+        #expect(labels.contains("Xcode — Project.swift"))
+        #expect(labels.contains("Xcode — Tests.swift"))
     }
 }
 
