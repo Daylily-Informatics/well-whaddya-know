@@ -7,11 +7,25 @@ import ServiceManagement
 
 /// Manages the wwkd background agent lifecycle via SMAppService (macOS 13+).
 /// Provides registration, status querying, and user-facing status descriptions.
+///
+/// When a CLI-installed plist exists at ~/Library/LaunchAgents/, SMAppService
+/// registration is skipped to avoid conflicting launchd label ownership.
 @MainActor
 final class AgentLifecycleManager: ObservableObject {
 
     /// The plist name embedded in Contents/Library/LaunchAgents/
     private static let agentPlistName = "com.daylily.wellwhaddyaknow.agent.plist"
+
+    /// The launchd label shared by both SMAppService and CLI plists
+    static let launchdLabel = "com.daylily.wellwhaddyaknow.agent"
+
+    /// Path to the CLI-installed plist (written by `wwk agent install`)
+    static var cliPlistPath: String {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents")
+            .appendingPathComponent("\(launchdLabel).plist")
+            .path
+    }
 
     /// Shared instance for app-wide use
     static let shared = AgentLifecycleManager()
@@ -25,9 +39,20 @@ final class AgentLifecycleManager: ObservableObject {
     @Published var requiresApproval: Bool = false
     @Published var isPlistMissing: Bool = false
 
+    /// True when a CLI-installed plist owns the launchd label.
+    /// When true, SMAppService registration is skipped to avoid conflicts.
+    @Published var isManagedByCLI: Bool = false
+
     private init() {
         self.service = SMAppService.agent(plistName: Self.agentPlistName)
         refreshStatus()
+    }
+
+    // MARK: - CLI Plist Detection
+
+    /// Check whether a CLI-installed plist exists at ~/Library/LaunchAgents/
+    var cliPlistExists: Bool {
+        FileManager.default.fileExists(atPath: Self.cliPlistPath)
     }
 
     // MARK: - Status
@@ -39,6 +64,18 @@ final class AgentLifecycleManager: ObservableObject {
 
     /// Refresh published status properties from SMAppService
     func refreshStatus() {
+        // Check for CLI plist first — it takes precedence
+        isManagedByCLI = cliPlistExists
+
+        if isManagedByCLI {
+            statusDescription = "Managed by CLI (wwk agent install)"
+            isRegistered = true
+            isEnabled = true
+            requiresApproval = false
+            isPlistMissing = false
+            return
+        }
+
         let status = service.status
         switch status {
         case .notRegistered:
@@ -73,8 +110,14 @@ final class AgentLifecycleManager: ObservableObject {
     // MARK: - Registration
 
     /// Register the agent as a login item via SMAppService.
+    /// Skips registration when a CLI-installed plist already owns the label.
     /// - Throws: Error if registration fails
     func register() throws {
+        if cliPlistExists {
+            // CLI plist owns the label — don't fight it
+            refreshStatus()
+            return
+        }
         try service.register()
         refreshStatus()
     }
@@ -82,6 +125,11 @@ final class AgentLifecycleManager: ObservableObject {
     /// Unregister the agent login item.
     /// - Throws: Error if unregistration fails
     func unregister() throws {
+        if cliPlistExists {
+            // CLI plist owns the label — SMAppService unregister would be a no-op or error
+            refreshStatus()
+            return
+        }
         try service.unregister()
         refreshStatus()
     }
@@ -97,7 +145,14 @@ final class AgentLifecycleManager: ObservableObject {
 
     /// Human-readable status string for diagnostics
     var diagnosticSummary: String {
-        """
+        if isManagedByCLI {
+            return """
+            Registration: Managed by CLI plist
+            CLI plist: \(Self.cliPlistPath)
+            SMAppService: deferred (CLI plist takes precedence)
+            """
+        }
+        return """
         Registration: \(statusDescription)
         SMAppService.status: \(statusRawString)
         Plist: \(Self.agentPlistName)

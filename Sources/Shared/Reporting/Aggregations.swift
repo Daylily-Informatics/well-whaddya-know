@@ -138,7 +138,130 @@ public enum Aggregations {
             .reduce(0.0) { $0 + $1.durationSeconds }
     }
 
+    // MARK: - Totals by Hour
+
+    /// Grouping strategy for hourly aggregation
+    public enum HourlyGroupBy: Sendable {
+        case app
+        case appWindow
+        case tag
+    }
+
+    /// Aggregate observed time into hourly buckets grouped by app, app+window, or tag.
+    ///
+    /// Segments spanning multiple hours are split at the hour boundary so each
+    /// hour gets the correct proportion of time. Only `.observed` segments are
+    /// included; gaps are skipped.
+    ///
+    /// - Parameters:
+    ///   - segments: The effective segments to aggregate
+    ///   - timeZone: Timezone for determining local hour-of-day
+    ///   - groupBy: How to label each bucket (app name, app+window, or tag)
+    /// - Returns: Array of (hour 0-23, label, seconds) tuples sorted by hour then label
+    public static func totalsByHour(
+        segments: [EffectiveSegment],
+        timeZone: TimeZone,
+        groupBy: HourlyGroupBy
+    ) -> [(hour: Int, label: String, seconds: Double)] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+
+        struct BucketKey: Hashable { let hour: Int; let label: String }
+        var buckets: [BucketKey: Double] = [:]
+
+        for segment in segments where segment.coverage == .observed {
+            let labels = labelsForSegment(segment, groupBy: groupBy)
+
+            // Split the segment at hour boundaries
+            let parts = splitAtHourBoundaries(segment: segment, calendar: calendar)
+
+            for (partStartUs, partEndUs) in parts {
+                let dur = Double(partEndUs - partStartUs) / 1_000_000.0
+                guard dur > 0 else { continue }
+                let partDate = Date(timeIntervalSince1970: Double(partStartUs) / 1_000_000.0)
+                let hour = calendar.component(.hour, from: partDate)
+                for label in labels {
+                    buckets[BucketKey(hour: hour, label: label), default: 0.0] += dur
+                }
+            }
+        }
+
+        return buckets
+            .map { (hour: $0.key.hour, label: $0.key.label, seconds: $0.value) }
+            .sorted { $0.hour != $1.hour ? $0.hour < $1.hour : $0.label < $1.label }
+    }
+
     // MARK: - Private Helpers
+
+    /// Extract label(s) for a segment based on grouping strategy
+    private static func labelsForSegment(
+        _ segment: EffectiveSegment,
+        groupBy: HourlyGroupBy
+    ) -> [String] {
+        switch groupBy {
+        case .app:
+            return [segment.appName.isEmpty ? "(unknown)" : segment.appName]
+        case .appWindow:
+            let app = segment.appName.isEmpty ? "(unknown)" : segment.appName
+            let title = segment.windowTitle ?? "(no title)"
+            return ["\(app) — \(title)"]
+        case .tag:
+            if segment.tags.isEmpty {
+                return ["(untagged)"]
+            }
+            return segment.tags
+        }
+    }
+
+    /// Split a single segment at local hour boundaries, returning (startUs, endUs) pairs
+    private static func splitAtHourBoundaries(
+        segment: EffectiveSegment,
+        calendar: Calendar
+    ) -> [(Int64, Int64)] {
+        guard segment.endTsUs > segment.startTsUs else { return [] }
+
+        let startDate = Date(timeIntervalSince1970: Double(segment.startTsUs) / 1_000_000.0)
+        let endDate = Date(timeIntervalSince1970: Double(segment.endTsUs) / 1_000_000.0)
+
+        // Collect hour boundaries that fall strictly within (start, end)
+        var boundaries: [Int64] = []
+        // Start of the next hour after startDate
+        var comps = calendar.dateComponents([.year, .month, .day, .hour], from: startDate)
+        comps.minute = 0; comps.second = 0
+        guard var nextHour = calendar.date(from: comps) else {
+            return [(segment.startTsUs, segment.endTsUs)]
+        }
+        // Advance to the next full hour
+        if nextHour <= startDate {
+            guard let nh = calendar.date(byAdding: .hour, value: 1, to: nextHour) else {
+                return [(segment.startTsUs, segment.endTsUs)]
+            }
+            nextHour = nh
+        }
+
+        while nextHour < endDate {
+            boundaries.append(Int64(nextHour.timeIntervalSince1970 * 1_000_000.0))
+            guard let nh = calendar.date(byAdding: .hour, value: 1, to: nextHour) else { break }
+            nextHour = nh
+        }
+
+        if boundaries.isEmpty {
+            return [(segment.startTsUs, segment.endTsUs)]
+        }
+
+        var result: [(Int64, Int64)] = []
+        var curStart = segment.startTsUs
+        for boundary in boundaries {
+            if boundary > curStart {
+                result.append((curStart, boundary))
+            }
+            curStart = boundary
+        }
+        if segment.endTsUs > curStart {
+            result.append((curStart, segment.endTsUs))
+        }
+        return result
+    }
 
     private static func formatDateKey(date: Date, timeZone: TimeZone, calendar: Calendar) -> String {
         var cal = calendar

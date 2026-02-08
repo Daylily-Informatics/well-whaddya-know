@@ -161,6 +161,7 @@ final class ViewerViewModel: ObservableObject {
     @Published var reportByApp: [ReportRow] = []
     @Published var reportByAppWindow: [ReportRow] = []
     @Published var reportByTag: [ReportRow] = []
+    @Published var reportSegments: [EffectiveSegment] = []
     @Published var isLoadingReports: Bool = false
 
     private let xpcClient = XPCClient()
@@ -382,6 +383,7 @@ final class ViewerViewModel: ObservableObject {
             reportByApp = []
             reportByAppWindow = []
             reportByTag = []
+            reportSegments = []
             return
         }
 
@@ -389,6 +391,9 @@ final class ViewerViewModel: ObservableObject {
             startTsUs: startTsUs,
             endTsUs: endTsUs
         )
+
+        // Store raw segments for Hourly Bar and Gantt views
+        reportSegments = segments
 
         // By app (with inactive time)
         // Cap the effective end at `now` so future time is never counted as inactive
@@ -1143,9 +1148,26 @@ enum ReportGrouping: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum ReportVisualizationMode: String, CaseIterable, Identifiable {
+    case table = "Table"
+    case hourlyBar = "Hourly Bar"
+    case gantt = "Timeline"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .table: return "tablecells"
+        case .hourlyBar: return "chart.bar.xaxis"
+        case .gantt: return "calendar.day.timeline.left"
+        }
+    }
+}
+
 struct ReportsTabView: View {
     @ObservedObject var viewModel: ViewerViewModel
     @State private var selectedGrouping: ReportGrouping = .byApp
+    @State private var visualizationMode: ReportVisualizationMode = .table
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1183,12 +1205,26 @@ struct ReportsTabView: View {
 
             Divider()
 
-            Picker("Group by", selection: $selectedGrouping) {
-                ForEach(ReportGrouping.allCases) { g in
-                    Text(g.rawValue).tag(g)
+            // Grouping + Visualization mode pickers
+            HStack(spacing: 12) {
+                Picker("Group by", selection: $selectedGrouping) {
+                    ForEach(ReportGrouping.allCases) { g in
+                        Text(g.rawValue).tag(g)
+                    }
                 }
+                .pickerStyle(.segmented)
+
+                Divider()
+                    .frame(height: 20)
+
+                Picker("View", selection: $visualizationMode) {
+                    ForEach(ReportVisualizationMode.allCases) { mode in
+                        Label(mode.rawValue, systemImage: mode.icon).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 280)
             }
-            .pickerStyle(.segmented)
             .padding(.horizontal)
             .padding(.vertical, 6)
 
@@ -1204,7 +1240,9 @@ struct ReportsTabView: View {
                     }
                 }()
 
-                if data.isEmpty {
+                let hasSegments = !viewModel.reportSegments.isEmpty
+
+                if data.isEmpty && !hasSegments {
                     VStack(spacing: 12) {
                         Image(systemName: "chart.bar.xaxis")
                             .font(.system(size: 48))
@@ -1214,13 +1252,32 @@ struct ReportsTabView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    ReportsChartView(data: data, grouping: selectedGrouping)
-                        .frame(minHeight: 280, idealHeight: 320)
+                    switch visualizationMode {
+                    case .table:
+                        ReportsChartView(data: data, grouping: selectedGrouping)
+                            .frame(minHeight: 280, idealHeight: 320)
+                            .padding()
+
+                        Divider()
+
+                        ReportsTableView(data: data, grouping: selectedGrouping)
+
+                    case .hourlyBar:
+                        HourlyBarChartView(
+                            segments: viewModel.reportSegments,
+                            grouping: selectedGrouping
+                        )
                         .padding()
 
-                    Divider()
-
-                    ReportsTableView(data: data, grouping: selectedGrouping)
+                    case .gantt:
+                        TimelineGanttView(
+                            segments: viewModel.reportSegments,
+                            grouping: selectedGrouping,
+                            rangeStart: viewModel.reportStartTime,
+                            rangeEnd: viewModel.reportEndTime
+                        )
+                        .padding()
+                    }
 
                     HStack {
                         Spacer()
@@ -1463,3 +1520,183 @@ struct ReportsTableView: View {
     }
 }
 
+
+// MARK: - Hourly Bar Chart View
+
+/// Data point for the hourly stacked bar chart
+private struct HourlyDataPoint: Identifiable {
+    let id = UUID()
+    let hourLabel: String
+    let hour: Int
+    let category: String
+    let minutes: Double
+}
+
+struct HourlyBarChartView: View {
+    let segments: [EffectiveSegment]
+    let grouping: ReportGrouping
+
+    private var dataPoints: [HourlyDataPoint] {
+        let tz = DisplayTimezoneHelper.preferred
+        let hourlyGroupBy: Aggregations.HourlyGroupBy = {
+            switch grouping {
+            case .byApp: return .app
+            case .byAppWindow: return .appWindow
+            case .byTag: return .tag
+            }
+        }()
+        let raw = Aggregations.totalsByHour(
+            segments: segments, timeZone: tz, groupBy: hourlyGroupBy
+        )
+        return raw.map { entry in
+            HourlyDataPoint(
+                hourLabel: String(format: "%02d:00", entry.hour),
+                hour: entry.hour,
+                category: entry.label,
+                minutes: entry.seconds / 60.0
+            )
+        }
+    }
+
+    var body: some View {
+        if dataPoints.isEmpty {
+            VStack(spacing: 12) {
+                Image(systemName: "chart.bar.xaxis")
+                    .font(.system(size: 48))
+                    .foregroundColor(.secondary)
+                Text("No hourly data for selected range")
+                    .font(.headline)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(spacing: 4) {
+                Chart(dataPoints) { dp in
+                    BarMark(
+                        x: .value("Hour", dp.hourLabel),
+                        y: .value("Minutes", dp.minutes)
+                    )
+                    .foregroundStyle(by: .value("Category", dp.category))
+                }
+                .chartXAxisLabel("Hour of Day")
+                .chartYAxisLabel("Minutes")
+                .chartLegend(position: .bottom, spacing: 8)
+                .frame(minHeight: 300, idealHeight: 400)
+
+                Text("Stacked by \(grouping.rawValue.lowercased())")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+}
+
+
+// MARK: - Timeline / Gantt View
+
+/// Data point for Gantt chart rectangles
+private struct GanttDataPoint: Identifiable {
+    let id = UUID()
+    let label: String
+    let startDate: Date
+    let endDate: Date
+    let isGap: Bool
+}
+
+struct TimelineGanttView: View {
+    let segments: [EffectiveSegment]
+    let grouping: ReportGrouping
+    let rangeStart: Date
+    let rangeEnd: Date
+
+    private var dataPoints: [GanttDataPoint] {
+        segments.compactMap { seg -> GanttDataPoint? in
+            guard seg.endTsUs > seg.startTsUs else { return nil }
+            let start = Date(timeIntervalSince1970: Double(seg.startTsUs) / 1_000_000.0)
+            let end = Date(timeIntervalSince1970: Double(seg.endTsUs) / 1_000_000.0)
+            let label: String = {
+                switch grouping {
+                case .byApp:
+                    return seg.coverage == .unobservedGap ? "⏸ Gap" :
+                        (seg.appName.isEmpty ? "(unknown)" : seg.appName)
+                case .byAppWindow:
+                    if seg.coverage == .unobservedGap { return "⏸ Gap" }
+                    let app = seg.appName.isEmpty ? "(unknown)" : seg.appName
+                    let title = seg.windowTitle ?? "(no title)"
+                    return "\(app) — \(title)"
+                case .byTag:
+                    if seg.coverage == .unobservedGap { return "⏸ Gap" }
+                    return seg.tags.first ?? "(untagged)"
+                }
+            }()
+            return GanttDataPoint(
+                label: label,
+                startDate: start,
+                endDate: end,
+                isGap: seg.coverage == .unobservedGap
+            )
+        }
+    }
+
+    /// Unique labels sorted by first appearance
+    private var sortedLabels: [String] {
+        var seen: [String: Int] = [:]
+        var order: [String] = []
+        for dp in dataPoints {
+            if seen[dp.label] == nil {
+                seen[dp.label] = order.count
+                order.append(dp.label)
+            }
+        }
+        return order
+    }
+
+    var body: some View {
+        let points = dataPoints
+        if points.isEmpty {
+            VStack(spacing: 12) {
+                Image(systemName: "calendar.day.timeline.left")
+                    .font(.system(size: 48))
+                    .foregroundColor(.secondary)
+                Text("No timeline data for selected range")
+                    .font(.headline)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                Chart(points) { dp in
+                    RectangleMark(
+                        xStart: .value("Start", dp.startDate),
+                        xEnd: .value("End", dp.endDate),
+                        y: .value("App", dp.label)
+                    )
+                    .foregroundStyle(dp.isGap ? .gray.opacity(0.25) : colorFor(dp.label))
+                    .cornerRadius(2)
+                }
+                .chartXAxis {
+                    AxisMarks(values: .automatic) { _ in
+                        AxisGridLine()
+                        AxisValueLabel(format: .dateTime.hour().minute())
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading)
+                }
+                .chartXScale(domain: rangeStart...min(rangeEnd, Date()))
+                .frame(minHeight: max(200, CGFloat(sortedLabels.count) * 32))
+            }
+        }
+    }
+
+    private let palette: [Color] = [
+        .blue, .green, .orange, .purple, .red,
+        .cyan, .yellow, .pink, .mint, .indigo,
+        .brown, .teal
+    ]
+
+    private func colorFor(_ label: String) -> Color {
+        if label == "⏸ Gap" { return .gray }
+        let labels = sortedLabels.filter { $0 != "⏸ Gap" }
+        guard let idx = labels.firstIndex(of: label) else { return .gray }
+        return palette[idx % palette.count]
+    }
+}
