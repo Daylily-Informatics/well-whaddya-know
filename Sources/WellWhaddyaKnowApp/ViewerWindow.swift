@@ -163,6 +163,10 @@ final class ViewerViewModel: ObservableObject {
     @Published var reportByTag: [ReportRow] = []
     @Published var reportSegments: [EffectiveSegment] = []
     @Published var isLoadingReports: Bool = false
+    @Published var reportAppFilter: String? = nil
+
+    /// All loaded segments before filter — kept so filter toggle doesn't re-query DB
+    private var allReportSegments: [EffectiveSegment] = []
 
     private let xpcClient = XPCClient()
 
@@ -384,6 +388,7 @@ final class ViewerViewModel: ObservableObject {
             reportByAppWindow = []
             reportByTag = []
             reportSegments = []
+            allReportSegments = []
             return
         }
 
@@ -392,25 +397,41 @@ final class ViewerViewModel: ObservableObject {
             endTsUs: endTsUs
         )
 
-        // Store raw segments for Hourly Bar and Gantt views
+        allReportSegments = segments
+        recomputeReportAggregations()
+    }
+
+    /// Set or clear the app-name filter and recompute aggregations in-memory
+    func setReportFilter(_ appName: String?) {
+        reportAppFilter = appName
+        recomputeReportAggregations()
+    }
+
+    /// Recompute report aggregations from stored segments, respecting filter
+    private func recomputeReportAggregations() {
+        let segments: [EffectiveSegment]
+        if let filter = reportAppFilter {
+            segments = allReportSegments.filter {
+                $0.coverage == .observed && $0.appName == filter
+            }
+        } else {
+            segments = allReportSegments
+        }
         reportSegments = segments
 
         // By app (with inactive time)
-        // Cap the effective end at `now` so future time is never counted as inactive
         let byApp = Aggregations.totalsByAppName(segments: segments)
         let totalActiveSeconds = byApp.values.reduce(0.0, +)
         let effectiveEnd = min(reportEndTime, Date())
         let rangeDurationSeconds = max(0, effectiveEnd.timeIntervalSince(reportStartTime))
         let inactiveSeconds = max(0, rangeDurationSeconds - totalActiveSeconds)
 
-        // Percentages relative to full range duration
         var appRows = byApp
             .map { ReportRow(appName: $0.key, windowTitle: nil, tagName: nil,
                              totalSeconds: $0.value,
                              percentage: rangeDurationSeconds > 0 ? $0.value / rangeDurationSeconds * 100 : 0) }
             .sorted { $0.totalSeconds > $1.totalSeconds }
 
-        // Append inactive row
         if inactiveSeconds > 0 {
             appRows.append(ReportRow(
                 appName: "Inactive",
@@ -438,6 +459,51 @@ final class ViewerViewModel: ObservableObject {
                              totalSeconds: $0.value,
                              percentage: totalTag > 0 ? $0.value / totalTag * 100 : 0) }
             .sorted { $0.totalSeconds > $1.totalSeconds }
+    }
+
+    /// Apply tag to all report segments matching a category label and optional hour
+    func applyTagToReportSegments(
+        category: String,
+        hour: Int?,
+        grouping: ReportGrouping,
+        tagName: String
+    ) async -> Int {
+        let tz = DisplayTimezoneHelper.preferred
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = tz
+
+        let matching = allReportSegments.filter { seg in
+            guard seg.coverage == .observed else { return false }
+
+            let label: String
+            switch grouping {
+            case .byApp:
+                label = seg.appName.isEmpty ? "(unknown)" : seg.appName
+            case .byAppWindow:
+                let app = seg.appName.isEmpty ? "(unknown)" : seg.appName
+                let title = seg.windowTitle ?? "(no title)"
+                label = "\(app) — \(title)"
+            case .byTag:
+                label = seg.tags.first ?? "(untagged)"
+            }
+            guard label == category else { return false }
+
+            if let h = hour {
+                let startDate = Date(timeIntervalSince1970: Double(seg.startTsUs) / 1_000_000.0)
+                return cal.component(.hour, from: startDate) == h
+            }
+            return true
+        }
+
+        for seg in matching {
+            let start = Date(timeIntervalSince1970: Double(seg.startTsUs) / 1_000_000.0)
+            let end = Date(timeIntervalSince1970: Double(seg.endTsUs) / 1_000_000.0)
+            await applyTag(startTime: start, endTime: end, tagName: tagName)
+        }
+
+        // Reload reports after tagging
+        await loadReports()
+        return matching.count
     }
 
     /// Create a tag and immediately apply it to a segment
@@ -1151,6 +1217,7 @@ enum ReportGrouping: String, CaseIterable, Identifiable {
 enum ReportVisualizationMode: String, CaseIterable, Identifiable {
     case table = "Table"
     case hourlyBar = "Hourly Bar"
+    case spaceFill = "Space Fill"
     case gantt = "Timeline"
 
     var id: String { rawValue }
@@ -1159,6 +1226,7 @@ enum ReportVisualizationMode: String, CaseIterable, Identifiable {
         switch self {
         case .table: return "tablecells"
         case .hourlyBar: return "chart.bar.xaxis"
+        case .spaceFill: return "cube.fill"
         case .gantt: return "calendar.day.timeline.left"
         }
     }
@@ -1168,6 +1236,8 @@ struct ReportsTabView: View {
     @ObservedObject var viewModel: ViewerViewModel
     @State private var selectedGrouping: ReportGrouping = .byApp
     @State private var visualizationMode: ReportVisualizationMode = .table
+    @State private var tagOperationMessage: String? = nil
+    @State private var showingTagAlert: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1228,6 +1298,28 @@ struct ReportsTabView: View {
             .padding(.horizontal)
             .padding(.vertical, 6)
 
+            // Active filter badge
+            if let filterName = viewModel.reportAppFilter {
+                HStack(spacing: 8) {
+                    Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                        .foregroundColor(.accentColor)
+                    Text("Filtered: \(filterName)")
+                        .font(.callout)
+                        .fontWeight(.medium)
+                    Spacer()
+                    Button {
+                        viewModel.setReportFilter(nil)
+                    } label: {
+                        Label("Clear Filter", systemImage: "xmark.circle.fill")
+                            .font(.callout)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 4)
+                .background(Color.accentColor.opacity(0.08))
+            }
+
             if viewModel.isLoadingReports {
                 ProgressView("Loading reports…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1265,7 +1357,46 @@ struct ReportsTabView: View {
                     case .hourlyBar:
                         HourlyBarChartView(
                             segments: viewModel.reportSegments,
-                            grouping: selectedGrouping
+                            grouping: selectedGrouping,
+                            tags: viewModel.tags,
+                            onFilterApp: { appName in
+                                viewModel.setReportFilter(appName)
+                            },
+                            onApplyTag: { category, hour, tagName in
+                                Task {
+                                    let count = await viewModel.applyTagToReportSegments(
+                                        category: category,
+                                        hour: hour,
+                                        grouping: selectedGrouping,
+                                        tagName: tagName
+                                    )
+                                    tagOperationMessage = "Tagged \(count) segment(s) with '\(tagName)'"
+                                    showingTagAlert = true
+                                }
+                            }
+                        )
+                        .padding()
+
+                    case .spaceFill:
+                        SpaceFillCubeView(
+                            segments: viewModel.reportSegments,
+                            grouping: selectedGrouping,
+                            tags: viewModel.tags,
+                            onFilterApp: { appName in
+                                viewModel.setReportFilter(appName)
+                            },
+                            onApplyTag: { category, tagName in
+                                Task {
+                                    let count = await viewModel.applyTagToReportSegments(
+                                        category: category,
+                                        hour: nil,
+                                        grouping: selectedGrouping,
+                                        tagName: tagName
+                                    )
+                                    tagOperationMessage = "Tagged \(count) segment(s) with '\(tagName)'"
+                                    showingTagAlert = true
+                                }
+                            }
                         )
                         .padding()
 
@@ -1291,6 +1422,12 @@ struct ReportsTabView: View {
         }
         .task {
             await viewModel.applyReportPreset(.today)
+            await viewModel.loadTags()
+        }
+        .alert("Tag Applied", isPresented: $showingTagAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(tagOperationMessage ?? "")
         }
     }
 
@@ -1535,6 +1672,12 @@ private struct HourlyDataPoint: Identifiable {
 struct HourlyBarChartView: View {
     let segments: [EffectiveSegment]
     let grouping: ReportGrouping
+    let tags: [TagItem]
+    var onFilterApp: ((String) -> Void)? = nil
+    var onApplyTag: ((String, Int?, String) -> Void)? = nil
+
+    @State private var hoveredCategory: String? = nil
+    @State private var hoveredHour: Int? = nil
 
     private var dataPoints: [HourlyDataPoint] {
         let tz = DisplayTimezoneHelper.preferred
@@ -1558,6 +1701,13 @@ struct HourlyBarChartView: View {
         }
     }
 
+    /// Categories present in the hovered hour
+    private var categoriesInHoveredHour: [String] {
+        guard let h = hoveredHour else { return [] }
+        let hourLabel = String(format: "%02d:00", h)
+        return Array(Set(dataPoints.filter { $0.hourLabel == hourLabel }.map(\.category))).sorted()
+    }
+
     var body: some View {
         if dataPoints.isEmpty {
             VStack(spacing: 12) {
@@ -1576,15 +1726,90 @@ struct HourlyBarChartView: View {
                         y: .value("Minutes", dp.minutes)
                     )
                     .foregroundStyle(by: .value("Category", dp.category))
+                    .opacity(hoveredHour == nil || dp.hour == hoveredHour ? 1.0 : 0.4)
                 }
                 .chartXAxisLabel("Hour of Day")
                 .chartYAxisLabel("Minutes")
                 .chartLegend(position: .bottom, spacing: 8)
                 .frame(minHeight: 300, idealHeight: 400)
+                .chartOverlay { proxy in
+                    GeometryReader { _ in
+                        Rectangle()
+                            .fill(.clear)
+                            .contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                switch phase {
+                                case .active(let location):
+                                    if let hourLabel: String = proxy.value(atX: location.x) {
+                                        hoveredHour = Int(hourLabel.prefix(2))
+                                        // Find the closest category by checking Y position
+                                        hoveredCategory = categoriesInHoveredHour.first
+                                    }
+                                case .ended:
+                                    hoveredHour = nil
+                                    hoveredCategory = nil
+                                }
+                            }
+                    }
+                }
+                .contextMenu {
+                    if let h = hoveredHour {
+                        let cats = categoriesInHoveredHour
+                        if cats.count == 1, let cat = cats.first {
+                            // Single category — direct actions
+                            Button {
+                                onFilterApp?(cat)
+                            } label: {
+                                Label("Filter For '\(cat)' Only",
+                                      systemImage: "line.3.horizontal.decrease.circle")
+                            }
 
-                Text("Stacked by \(grouping.rawValue.lowercased())")
+                            Divider()
+
+                            Menu("Apply Tag to '\(cat)' at \(String(format: "%02d", h)):00…") {
+                                tagMenuContent(category: cat, hour: h)
+                            }
+                        } else {
+                            // Multiple categories in this hour
+                            Menu("Filter For…") {
+                                ForEach(cats, id: \.self) { cat in
+                                    Button(cat) { onFilterApp?(cat) }
+                                }
+                            }
+
+                            Divider()
+
+                            Menu("Apply Tag…") {
+                                ForEach(cats, id: \.self) { cat in
+                                    Menu("\(cat) at \(String(format: "%02d", h)):00") {
+                                        tagMenuContent(category: cat, hour: h)
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        Text("Right-click on a bar for options")
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Text("Stacked by \(grouping.rawValue.lowercased()) · Right-click bars for actions")
                     .font(.caption2)
                     .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func tagMenuContent(category: String, hour: Int) -> some View {
+        let activeTags = tags.filter { !$0.isRetired }
+        if activeTags.isEmpty {
+            Text("No active tags")
+                .foregroundColor(.secondary)
+        }
+        ForEach(activeTags) { tag in
+            Button(tag.name) {
+                onApplyTag?(category, hour, tag.name)
             }
         }
     }
@@ -1697,6 +1922,188 @@ struct TimelineGanttView: View {
         if label == "⏸ Gap" { return .gray }
         let labels = sortedLabels.filter { $0 != "⏸ Gap" }
         guard let idx = labels.firstIndex(of: label) else { return .gray }
+        return palette[idx % palette.count]
+    }
+}
+
+
+// MARK: - Space Fill (Treemap) View
+
+/// Data item for the treemap — one per category
+fileprivate struct TreemapItem: Identifiable {
+    let id = UUID()
+    let label: String
+    let seconds: Double
+    let color: Color
+}
+
+struct SpaceFillCubeView: View {
+    let segments: [EffectiveSegment]
+    let grouping: ReportGrouping
+    let tags: [TagItem]
+    var onFilterApp: ((String) -> Void)? = nil
+    var onApplyTag: ((String, String) -> Void)? = nil
+
+    private var items: [TreemapItem] {
+        var totals: [(label: String, seconds: Double)] = []
+
+        switch grouping {
+        case .byApp:
+            let byApp = Aggregations.totalsByAppName(segments: segments)
+            totals = byApp.map { ($0.key, $0.value) }
+        case .byAppWindow:
+            let byAW = Aggregations.totalsByAppNameAndWindow(segments: segments)
+            totals = byAW.map { ("\($0.appName) — \($0.windowTitle)", $0.seconds) }
+        case .byTag:
+            let byTag = Aggregations.totalsByTag(segments: segments)
+            totals = byTag.map { ($0.key, $0.value) }
+        }
+
+        let sorted = totals.sorted { $0.seconds > $1.seconds }
+        let labels = sorted.map(\.label)
+
+        return sorted.enumerated().map { idx, entry in
+            TreemapItem(
+                label: entry.label,
+                seconds: entry.seconds,
+                color: colorFor(entry.label, at: idx, labels: labels)
+            )
+        }
+    }
+
+    var body: some View {
+        let treeItems = items
+        if treeItems.isEmpty {
+            VStack(spacing: 12) {
+                Image(systemName: "cube.fill")
+                    .font(.system(size: 48))
+                    .foregroundColor(.secondary)
+                Text("No data for selected range")
+                    .font(.headline)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(spacing: 4) {
+                GeometryReader { geo in
+                    let rects = Self.computeTreemap(
+                        items: treeItems, in: CGRect(origin: .zero, size: geo.size)
+                    )
+                    ZStack {
+                        ForEach(Array(zip(treeItems.indices, treeItems)), id: \.1.id) { idx, item in
+                            if idx < rects.count {
+                                let rect = rects[idx]
+                                treemapBlock(item: item, rect: rect)
+                            }
+                        }
+                    }
+                }
+                .frame(minHeight: 300, idealHeight: 400)
+
+                Text("Sized by duration · \(grouping.rawValue.lowercased()) · Right-click blocks for actions")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func treemapBlock(item: TreemapItem, rect: CGRect) -> some View {
+        let hours = item.seconds / 3600.0
+        let label = item.label
+        RoundedRectangle(cornerRadius: 4)
+            .fill(item.color.opacity(0.85))
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(Color.primary.opacity(0.15), lineWidth: 1)
+            )
+            .overlay {
+                VStack(spacing: 2) {
+                    Text(label)
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                    Text(String(format: "%.1fh", hours))
+                        .font(.system(.caption2, design: .monospaced))
+                }
+                .foregroundColor(.white)
+                .shadow(color: .black.opacity(0.5), radius: 1, x: 0, y: 1)
+                .padding(4)
+            }
+            .frame(width: max(0, rect.width - 2), height: max(0, rect.height - 2))
+            .position(x: rect.midX, y: rect.midY)
+            .contextMenu {
+                Button {
+                    onFilterApp?(label)
+                } label: {
+                    Label("Filter For '\(label)' Only",
+                          systemImage: "line.3.horizontal.decrease.circle")
+                }
+
+                Divider()
+
+                Menu("Apply Tag to '\(label)'…") {
+                    let activeTags = tags.filter { !$0.isRetired }
+                    if activeTags.isEmpty {
+                        Text("No active tags")
+                            .foregroundColor(.secondary)
+                    }
+                    ForEach(activeTags) { tag in
+                        Button(tag.name) {
+                            onApplyTag?(label, tag.name)
+                        }
+                    }
+                }
+            }
+            .help("\(label): \(String(format: "%.2f", hours))h")
+    }
+
+    /// Squarified treemap layout — returns one CGRect per item
+    fileprivate static func computeTreemap(items: [TreemapItem], in bounds: CGRect) -> [CGRect] {
+        guard !items.isEmpty else { return [] }
+        let total = items.reduce(0.0) { $0 + $1.seconds }
+        guard total > 0 else { return items.map { _ in bounds } }
+
+        var rects = [CGRect](repeating: .zero, count: items.count)
+        var remaining = bounds
+
+        for i in 0..<items.count {
+            let fraction = items[i].seconds / max(total, 1e-9)
+            let isLastItem = (i == items.count - 1)
+
+            if isLastItem {
+                rects[i] = remaining
+            } else if remaining.width >= remaining.height {
+                // Split horizontally
+                let w = remaining.width * CGFloat(fraction)
+                    / CGFloat(items[i...].reduce(0.0) { $0 + $1.seconds } / max(total, 1e-9))
+                let clampedW = min(w, remaining.width)
+                rects[i] = CGRect(x: remaining.minX, y: remaining.minY,
+                                  width: clampedW, height: remaining.height)
+                remaining = CGRect(x: remaining.minX + clampedW, y: remaining.minY,
+                                   width: remaining.width - clampedW, height: remaining.height)
+            } else {
+                // Split vertically
+                let h = remaining.height * CGFloat(fraction)
+                    / CGFloat(items[i...].reduce(0.0) { $0 + $1.seconds } / max(total, 1e-9))
+                let clampedH = min(h, remaining.height)
+                rects[i] = CGRect(x: remaining.minX, y: remaining.minY,
+                                  width: remaining.width, height: clampedH)
+                remaining = CGRect(x: remaining.minX, y: remaining.minY + clampedH,
+                                   width: remaining.width, height: remaining.height - clampedH)
+            }
+        }
+        return rects
+    }
+
+    private let palette: [Color] = [
+        .blue, .green, .orange, .purple, .red,
+        .cyan, .yellow, .pink, .mint, .indigo,
+        .brown, .teal
+    ]
+
+    private func colorFor(_ label: String, at idx: Int, labels: [String]) -> Color {
+        if label == "Inactive" || label == "(untagged)" { return .gray }
         return palette[idx % palette.count]
     }
 }
