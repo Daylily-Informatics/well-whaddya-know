@@ -159,18 +159,25 @@ wwk agent install
 
 # --- Option A: Homebrew ---
 brew tap Daylily-Informatics/tap
-brew install wwk                                          # CLI + agent
-brew install --cask Daylily-Informatics/tap/wellwhaddyaknow  # GUI app
-wwk agent install                                         # start agent at login
+brew install wwk                                             # CLI + agent
+brew install --cask Daylily-Informatics/tap/wellwhaddyaknow  # GUI app (requires sudo)
+wwk agent install                                            # register agent as login item
+open -a WellWhaddyaKnow                                     # launch the GUI
+
+# Non-admin users (no sudo): install the GUI to ~/Applications instead
+# mkdir -p ~/Applications
+# brew install --cask Daylily-Informatics/tap/wellwhaddyaknow --appdir=~/Applications
 
 # --- Option B: Build from source ---
 git clone https://github.com/Daylily-Informatics/well-whaddya-know.git
 cd well-whaddya-know
-./scripts/build-app.sh --release                          # builds .app bundle
-open .build/release/WellWhaddyaKnow.app                   # launch the GUI
+./scripts/build-app.sh --release                             # builds .app bundle
+wwk agent install                                            # register agent as login item
+open .build/release/WellWhaddyaKnow.app                      # launch the GUI
 
 # --- Verify ---
-wwk status          # should show current tracking state
+wwk agent status    # confirm agent is running
+wwk status          # current tracking state
 wwk today           # today's time breakdown by app
 ```
 
