@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Agent.swift - Main background agent implementation
 
+import CoreModel
 import Foundation
 import Storage
 import Sensors
@@ -18,7 +19,7 @@ public actor Agent: SensorEventHandler {
     
     // MARK: - Configuration
 
-    public static let agentVersion = "1.0.0"
+    public static let agentVersion = BuildVersion.version
 
     /// Bundle IDs to exclude from activity tracking.
     /// The app should not track itself or its own agent.

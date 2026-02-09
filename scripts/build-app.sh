@@ -25,6 +25,9 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
 echo "Building $APP_NAME ($BUILD_CONFIG)..."
 
+# Generate BuildVersion.swift from git tags (must run before swift build)
+"$SCRIPT_DIR/generate-version.sh" "$PROJECT_ROOT"
+
 # Build the executable and the agent
 swift build $BUILD_FLAGS --product WellWhaddyaKnow
 swift build $BUILD_FLAGS --product wwkd

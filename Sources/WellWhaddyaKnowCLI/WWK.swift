@@ -2,6 +2,7 @@
 // WWK.swift - Main CLI entry point per SPEC.md Section 10
 
 import ArgumentParser
+import CoreModel
 import Foundation
 
 /// Main CLI entry point for well-whaddya-know
@@ -10,7 +11,7 @@ struct WWK: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "wwk",
         abstract: "WellWhaddyaKnow - macOS time tracking CLI",
-        version: "0.3.5",
+        version: BuildVersion.version,
         subcommands: [
             Status.self,
             Summary.self,

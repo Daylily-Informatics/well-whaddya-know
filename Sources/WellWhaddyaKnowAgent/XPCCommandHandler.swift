@@ -21,7 +21,7 @@ public final class XPCCommandHandler: @unchecked Sendable {
     private let authorUid: Int
     private let clientVersion: String
 
-    public static let version = "0.1.0"
+    public static let version = BuildVersion.version
 
     public init(
         connection: DatabaseConnection,

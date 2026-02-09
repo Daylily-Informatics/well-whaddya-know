@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // PreferencesWindow.swift - Preferences window per SPEC.md Section 9.3
 
+import CoreModel
 import SwiftUI
 import XPCProtocol
 import ServiceManagement
@@ -891,7 +892,7 @@ struct AboutPreferencesView: View {
                 .font(.title)
                 .fontWeight(.bold)
 
-            Text("Version 0.1.0")
+            Text("Version \(BuildVersion.version)")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
 
