@@ -174,6 +174,85 @@ wwk status          # should show current tracking state
 wwk today           # today's time breakdown by app
 ```
 
+## GUI Overview
+
+### Menu Bar
+
+Click the eye icon in the menu bar to see real-time tracking status, current app/window, today's total, and quick actions.
+
+![Menu bar status popover](docs/images/wwk_gui_menu.png)
+
+---
+
+### Viewer — Reports
+
+Open the Viewer window to explore your time data. The **Reports** tab offers multiple visualization modes:
+
+**Hourly Bar Chart** — stacked bars showing time per app across each hour of the day:
+
+![Hourly bar chart grouped by app](docs/images/report_bar_by_app.png)
+
+**Space Fill (by App)** — treemap with proportional blocks sized by total time:
+
+![Space fill treemap by app](docs/images/report_spacefill_by_app.png)
+
+**Space Fill (by App + Window)** — drill down to see time per window within each app:
+
+![Space fill treemap by app and window name](docs/images/report_spacefill_by_app_windowname.png)
+
+**Timeline** — Gantt-style view showing exactly when each app was in the foreground:
+
+![Timeline gantt view by app](docs/images/report_timeline_by_app.png)
+
+---
+
+### Viewer — Tags
+
+Create, apply, and manage tags to categorize time ranges. Tags persist across sessions and appear in exports.
+
+![Tags tab](docs/images/report_tags.png)
+
+---
+
+### Preferences
+
+Configure the app via **Preferences…** in the menu bar dropdown.
+
+| Tab | What it does |
+|-----|-------------|
+| **General** | Display timezone, polling interval, appearance |
+| **Permissions** | Accessibility permission status and setup guide |
+| **Diagnostics** | Live agent status, IPC health, database stats, event counts |
+| **Data** | Database location, size, backup/reset options |
+| **About** | Version info, links, credits |
+
+<details>
+<summary><strong>Preferences screenshots</strong> (click to expand)</summary>
+
+**General** — display timezone and tracking preferences:
+
+![Preferences — General tab](docs/images/pref_general.png)
+
+**Permissions** — accessibility permission status and instructions:
+
+![Preferences — Permissions tab](docs/images/pref_permissions.png)
+
+**Diagnostics** — live agent, IPC, and database health:
+
+![Preferences — Diagnostics tab](docs/images/pref_diagnostics.png)
+
+**Data** — database location and management:
+
+![Preferences — Data tab](docs/images/pref_data.png)
+
+**About** — version and credits:
+
+![Preferences — About tab](docs/images/pref_about.png)
+
+</details>
+
+---
+
 ## Usage
 
 > *"Over time, you spend too much time thinking about what you need to do, and not doing what you need to do."*
@@ -293,7 +372,7 @@ swift build -c release
 ./scripts/build-app.sh           # debug
 ./scripts/build-app.sh --release # release
 
-# Run tests (222 tests)
+# Run tests (228 tests)
 swift test
 ```
 
