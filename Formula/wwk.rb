@@ -4,8 +4,8 @@
 class Wwk < Formula
   desc "CLI for WellWhaddyaKnow time tracker"
   homepage "https://github.com/Daylily-Informatics/well-whaddya-know"
-  url "https://github.com/Daylily-Informatics/well-whaddya-know/archive/refs/tags/0.4.1.tar.gz"
-  sha256 "3efa53baf04a852d7369bf3397f4fd57c4d66410952675d396c683bcebb26ff4"
+  url "https://github.com/Daylily-Informatics/well-whaddya-know/archive/refs/tags/0.5.0.tar.gz"
+  sha256 "c0c326c44b0dff354bff46f13095d3b6a44785e54ac6e9e00b50168ecbcc6b4b"
   license "MIT"
   head "https://github.com/Daylily-Informatics/well-whaddya-know.git", branch: "main"
 
