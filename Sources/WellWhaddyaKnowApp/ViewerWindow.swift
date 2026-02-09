@@ -1417,6 +1417,22 @@ struct ReportsTabView: View {
                         }
                         .padding()
                     }
+
+                    // Motivational footer
+                    HStack {
+                        Spacer()
+                        VStack(spacing: 1) {
+                            Text("\"Over time, you spend too much time thinking about what you need to do,")
+                            Text("and not doing what you need to do.\"")
+                            Text("— Mel Robbins")
+                                .fontWeight(.medium)
+                        }
+                        .font(.caption2)
+                        .italic()
+                        .foregroundColor(.secondary.opacity(0.7))
+                        Spacer()
+                    }
+                    .padding(.bottom, 8)
                 }
             }
         }

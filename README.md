@@ -8,6 +8,9 @@ A **local-only** macOS time tracker that records how time passed on your machine
 
 **No timers. No idle detection. No cloud. No telemetry.**
 
+> *"Time is an illusion, lunchtime doubly so."*
+> — **Ford Prefect**, *The Hitchhiker's Guide to the Galaxy*
+
 ## What It Does
 
 - 📊 **Automatic tracking**: Records foreground app and window title when your screen is unlocked
@@ -172,6 +175,9 @@ wwk today           # today's time breakdown by app
 ```
 
 ## Usage
+
+> *"Over time, you spend too much time thinking about what you need to do, and not doing what you need to do."*
+> — **Mel Robbins**
 
 ### Menu Bar App
 
