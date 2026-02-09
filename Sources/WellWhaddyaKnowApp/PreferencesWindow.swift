@@ -901,6 +901,19 @@ struct AboutPreferencesView: View {
 
             Divider()
 
+            VStack(spacing: 2) {
+                Text("\"Time is an illusion, lunchtime doubly so.\"")
+                    .font(.system(.callout, design: .serif))
+                    .italic()
+                    .foregroundColor(.accentColor)
+                Text("— Ford Prefect, The Hitchhiker's Guide to the Galaxy")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.vertical, 4)
+
+            Divider()
+
             VStack(spacing: 8) {
                 Link("View on GitHub", destination: URL(string: "https://github.com/Daylily-Informatics/well-whaddya-know")!)
                 Link("Privacy Policy", destination: URL(string: "https://github.com/Daylily-Informatics/well-whaddya-know/blob/main/PRIVACY.md")!)
