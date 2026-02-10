@@ -100,8 +100,38 @@ final class PreferencesViewModel: ObservableObject {
     @Published var uniqueApps: Int = 0
     @Published var appGroupAccessible: Bool = false
     @Published var isCurrentlyWorking: Bool = false
+    /// Agent's own accessibility status (separate from GUI app's permission)
+    @Published var agentAccessibilityGranted: Bool = false
 
     private let xpcClient = XPCClient()
+
+    /// launchd label used by the CLI-installed agent plist
+    private let launchdLabel = "com.daylily.wellwhaddyaknow.agent"
+
+    /// Run a shell command and return (exitCode, stdout, stderr).
+    /// Mirrors the CLI's `shell()` helper in AgentCommand.swift.
+    private nonisolated func shell(_ args: [String]) -> (Int32, String, String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = args
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return (1, "", error.localizedDescription)
+        }
+        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        return (
+            process.terminationStatus,
+            String(data: outData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        )
+    }
 
     func refreshStatus() async {
         isRefreshing = true
@@ -144,6 +174,11 @@ final class PreferencesViewModel: ObservableObject {
         isPlistMissing = lifecycle.isPlistMissing
         isManagedByCLI = lifecycle.isManagedByCLI
 
+        // Check GUI app's own accessibility permission locally.
+        // macOS tracks AX permission per-executable, so the GUI app and the
+        // agent (wwkd) have independent permission states.
+        accessibilityGranted = AXIsProcessTrusted()
+
         // Query agent via IPC for real status
         do {
             let status = try await xpcClient.getStatus()
@@ -155,11 +190,12 @@ final class PreferencesViewModel: ObservableObject {
             agentStatusMessage = "Running (v\(status.agentVersion), uptime \(formatUptime(status.agentUptime)))"
             ipcConnected = true
 
+            // Store agent's AX status separately (for diagnostics)
             switch status.accessibilityStatus {
             case .granted:
-                accessibilityGranted = true
+                agentAccessibilityGranted = true
             case .denied, .unknown:
-                accessibilityGranted = false
+                agentAccessibilityGranted = false
             }
         } catch {
             agentRunning = false
@@ -168,7 +204,7 @@ final class PreferencesViewModel: ObservableObject {
             agentUptime = 0
             agentPID = nil
             agentStatusMessage = "Not running"
-            accessibilityGranted = false
+            agentAccessibilityGranted = false
             ipcConnected = false
         }
 
@@ -261,6 +297,9 @@ final class PreferencesViewModel: ObservableObject {
     }
 
     func startAgent() {
+        agentStatusMessage = "Starting..."
+        prefLog.info("Starting agent via launchctl kickstart")
+
         // Clean up stale socket before starting (agent can't bind if orphan socket exists)
         let sock = getIPCSocketPath()
         if FileManager.default.fileExists(atPath: sock) {
@@ -268,61 +307,38 @@ final class PreferencesViewModel: ObservableObject {
             prefLog.info("Removed stale socket before agent start")
         }
 
-        // Build candidate paths for the wwkd binary
-        let bundleAgentPath: String
-        if let bundlePath = Bundle.main.executablePath {
-            let bundleDir = (bundlePath as NSString).deletingLastPathComponent
-            bundleAgentPath = (bundleDir as NSString).appendingPathComponent("wwkd")
-        } else {
-            bundleAgentPath = "/usr/local/bin/wwkd"
-        }
-
-        let candidates = [
-            bundleAgentPath,
-            ProcessInfo.processInfo.environment["HOME"].map { "\($0)/projects/daylily/well-whaddya-know/.build/debug/wwkd" } ?? "",
-            "/usr/local/bin/wwkd",
-        ]
-
-        for path in candidates where FileManager.default.isExecutableFile(atPath: path) {
-            prefLog.info("Starting agent from: \(path)")
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: path)
-            process.arguments = []
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-            do {
-                try process.run()
-                agentStatusMessage = "Starting..."
-                prefLog.info("Agent process launched (pid \(process.processIdentifier))")
-            } catch {
-                prefLog.error("Failed to launch agent at \(path): \(error.localizedDescription)")
-                agentStatusMessage = "Launch failed: \(error.localizedDescription)"
+        let label = launchdLabel
+        Task.detached { [weak self] in
+            guard let self else { return }
+            let (code, _, err) = self.shell([
+                "launchctl", "kickstart", "-k",
+                "gui/\(getuid())/\(label)",
+            ])
+            prefLog.info("launchctl kickstart exited with status \(code)")
+            if code != 0 {
+                prefLog.error("launchctl kickstart failed: \(err)")
             }
-            Task {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                await refreshStatus()
+
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            _ = await MainActor.run { [weak self] in
+                Task { await self?.refreshStatus() }
             }
-            return
         }
-        prefLog.error("Cannot find wwkd binary in any candidate path")
-        agentStatusMessage = "Cannot find wwkd binary"
     }
 
     func stopAgent() {
         agentStatusMessage = "Stopping..."
-        prefLog.info("Stopping agent via pkill")
-        Task.detached {
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-            task.arguments = ["-TERM", "wwkd"]
-            task.standardOutput = FileHandle.nullDevice
-            task.standardError = FileHandle.nullDevice
-            do {
-                try task.run()
-                task.waitUntilExit()
-                prefLog.info("pkill exited with status \(task.terminationStatus)")
-            } catch {
-                prefLog.error("pkill failed: \(error.localizedDescription)")
+        prefLog.info("Stopping agent via launchctl kill")
+        let label = launchdLabel
+        Task.detached { [weak self] in
+            guard let self else { return }
+            let (code, _, err) = self.shell([
+                "launchctl", "kill", "SIGTERM",
+                "gui/\(getuid())/\(label)",
+            ])
+            prefLog.info("launchctl kill exited with status \(code)")
+            if code != 0 {
+                prefLog.error("launchctl kill failed: \(err)")
             }
 
             // Clean up socket after stop
@@ -342,27 +358,23 @@ final class PreferencesViewModel: ObservableObject {
 
     func restartAgent() {
         agentStatusMessage = "Restarting..."
-        prefLog.info("Restarting agent")
-        Task.detached {
-            // Stop
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-            task.arguments = ["-TERM", "wwkd"]
-            task.standardOutput = FileHandle.nullDevice
-            task.standardError = FileHandle.nullDevice
-            try? task.run()
-            task.waitUntilExit()
-
-            // Wait for agent to exit, clean socket
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            let sock = getIPCSocketPath()
-            if FileManager.default.fileExists(atPath: sock) {
-                try? FileManager.default.removeItem(atPath: sock)
+        prefLog.info("Restarting agent via launchctl kickstart -k")
+        let label = launchdLabel
+        Task.detached { [weak self] in
+            guard let self else { return }
+            // kickstart -k kills the running instance and immediately restarts it
+            let (code, _, err) = self.shell([
+                "launchctl", "kickstart", "-k",
+                "gui/\(getuid())/\(label)",
+            ])
+            prefLog.info("launchctl kickstart -k exited with status \(code)")
+            if code != 0 {
+                prefLog.error("launchctl kickstart -k failed: \(err)")
             }
 
-            // Start on main actor
-            await MainActor.run { [weak self] in
-                self?.startAgent()
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            _ = await MainActor.run { [weak self] in
+                Task { await self?.refreshStatus() }
             }
         }
     }
@@ -444,7 +456,8 @@ final class PreferencesViewModel: ObservableObject {
             "  Unique apps: \(uniqueApps)",
             "",
             "Permissions:",
-            "  Accessibility: \(accessibilityGranted ? "Granted" : "Denied")",
+            "  Accessibility (GUI): \(accessibilityGranted ? "Granted" : "Denied")",
+            "  Accessibility (Agent): \(agentRunning ? (agentAccessibilityGranted ? "Granted" : "Denied") : "N/A (not running)")",
             "  App Group: \(appGroupAccessible ? "Accessible" : "Not accessible")",
             "",
             "Generated: \(ISO8601DateFormatter().string(from: Date()))",
@@ -634,9 +647,26 @@ struct PermissionsPreferencesView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 } else {
-                    Text("Accessibility permission is active. Window titles are being captured.")
+                    Text("Accessibility permission is active for this app.")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                }
+
+                // Agent's own AX status (separate executable)
+                if viewModel.agentRunning {
+                    HStack {
+                        Image(systemName: viewModel.agentAccessibilityGranted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundColor(viewModel.agentAccessibilityGranted ? .green : .orange)
+                        Text(viewModel.agentAccessibilityGranted
+                             ? "Agent (wwkd) has accessibility permission ✓"
+                             : "Agent (wwkd) needs accessibility permission")
+                            .font(.caption)
+                    }
+                    if !viewModel.agentAccessibilityGranted {
+                        Text("The agent binary also needs Accessibility permission for window title capture. Add the wwkd binary in System Settings → Privacy & Security → Accessibility.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
                 }
 
                 HStack(spacing: 8) {
@@ -763,7 +793,9 @@ struct DiagnosticsPreferencesView: View {
                 }
 
                 Section("Permissions") {
-                    diagRow("Accessibility", ok: viewModel.accessibilityGranted)
+                    diagRow("Accessibility (GUI)", ok: viewModel.accessibilityGranted)
+                    diagRow("Accessibility (Agent)", ok: viewModel.agentRunning ? viewModel.agentAccessibilityGranted : nil,
+                            detail: viewModel.agentRunning ? nil : "agent not running")
                     diagRow("App Group container", ok: viewModel.appGroupAccessible)
                 }
 
