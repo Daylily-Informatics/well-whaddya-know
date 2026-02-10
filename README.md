@@ -34,150 +34,184 @@ A **local-only** macOS time tracker that records how time passed on your machine
 |-----------|-------------|
 | **WellWhaddyaKnow.app** | Menu bar app with status popover, viewer/editor, and preferences |
 | **wwkd** | Background agent (login item) that writes events to SQLite |
-| **wwk** | Command-line interface for reporting and editing (Homebrew/direct download) |
+| **wwk** | Command-line interface for reporting and editing |
 
 ## Requirements
 
 - macOS 13 (Ventura) or later
-- Accessibility permission (optional, for window title capture)
+- Xcode 14+ or Command Line Tools with Swift 6 (build dependency only)
+- Accessibility permission (for window title capture — see [Permissions](#permissions))
 
-## Installation
+---
 
-### Homebrew — CLI (`wwk` + `wwkd` agent)
+## Installation via Homebrew
+
+The `wwk` Homebrew formula installs **all three components** in a single command: the `wwk` CLI, the `wwkd` background agent, and the `WellWhaddyaKnow.app` menu bar GUI.
+
+### Standard Install (admin user)
+
+Most macOS users have admin (sudo) access. This is the default Homebrew setup.
 
 ```bash
-brew tap Daylily-Informatics/tap
-brew install wwk
-```
-
-Or as a single command:
-
-```bash
+# Step 1: Install
 brew install Daylily-Informatics/tap/wwk
-```
 
-This installs:
-- `wwk` — the command-line interface
-- `wwkd` — the background agent that records events
-
-After installing, set up the agent to start at login:
-
-```bash
-wwk agent install   # creates a launchd plist and starts wwkd
-wwk agent status    # verify it's running
-```
-
-### Homebrew — GUI app (`WellWhaddyaKnow.app`)
-
-```bash
-brew install --cask Daylily-Informatics/tap/wellwhaddyaknow
-```
-
-This installs `WellWhaddyaKnow.app` to `/Applications` (requires admin/sudo). The app embeds its own copy of `wwkd` and manages the agent lifecycle automatically.
-
-**Non-admin users** (no sudo access): install to your home Applications folder instead:
-
-```bash
-mkdir -p ~/Applications
-brew install --cask Daylily-Informatics/tap/wellwhaddyaknow --appdir=~/Applications
-```
-
-macOS recognizes `~/Applications` as a valid launch location — Spotlight, Launchpad, and `open -a WellWhaddyaKnow` all work from there.
-
-### Build from Source
-
-Requires **Xcode 14+** (Swift 6.0) and **macOS 13+**.
-
-#### GUI app (`.app` bundle)
-
-```bash
-git clone https://github.com/Daylily-Informatics/well-whaddya-know.git
-cd well-whaddya-know
-./scripts/build-app.sh            # debug build
-# or
-./scripts/build-app.sh --release  # optimized release build
-```
-
-The script builds both `WellWhaddyaKnow` and `wwkd`, assembles a signed `.app` bundle, and prints the path:
-
-```
-.build/debug/WellWhaddyaKnow.app    # debug
-.build/release/WellWhaddyaKnow.app  # release
-```
-
-To run:
-
-```bash
-open .build/debug/WellWhaddyaKnow.app
-```
-
-To install system-wide:
-
-```bash
-sudo cp -R .build/release/WellWhaddyaKnow.app /Applications/
-```
-
-#### CLI only
-
-```bash
-git clone https://github.com/Daylily-Informatics/well-whaddya-know.git
-cd well-whaddya-know
-swift build -c release
-```
-
-Binaries land in `.build/release/`:
-
-```
-.build/release/wwk    # CLI
-.build/release/wwkd   # background agent
-```
-
-Copy them somewhere on your `PATH`:
-
-```bash
-cp .build/release/wwk .build/release/wwkd /usr/local/bin/
-# or for a single-user install:
-mkdir -p ~/.local/bin
-cp .build/release/wwk .build/release/wwkd ~/.local/bin/
-```
-
-Then install the agent as a login item:
-
-```bash
+# Step 2: Register the agent as a login item (starts automatically at login)
 wwk agent install
+
+# Step 3: Launch the GUI (menu bar app — look for the icon in your menu bar)
+wwk gui
+# or equivalently:
+open $(brew --prefix)/opt/wwk/WellWhaddyaKnow.app
+
+# Step 4: Grant permissions (see Permissions section below)
+
+# Step 5: Verify
+wwk agent status    # confirm agent is running
+wwk doctor          # full health check
+wwk today           # today's time breakdown
 ```
 
-> **Multi-user macOS note:** Homebrew is single-user by default. If `/opt/homebrew` is owned by
-> another account, either share ownership (add both users to a `brew` group) or build from source
-> and copy binaries to a per-user location as shown above. For the GUI cask, non-admin users
-> should use `--appdir=~/Applications` (see [Homebrew GUI](#homebrew--gui-app-wellwhaddyaknowapp) above).
+### Non-Admin Install (local user, no sudo)
+
+If Homebrew is installed in your home directory (e.g., `~/.homebrew`) or you don't have admin access:
+
+```bash
+# Step 1: Install (same command — Homebrew handles local installs)
+brew install Daylily-Informatics/tap/wwk
+
+# Step 2: Register the agent
+wwk agent install
+
+# Step 3: Launch the GUI
+wwk gui
+
+# Step 4: Grant permissions (see Permissions section below)
+```
+
+> **Note:** The formula builds from source, so it works regardless of whether Homebrew is in `/opt/homebrew` (default on Apple Silicon), `/usr/local` (default on Intel), or a user-local prefix. The `wwk agent install` command auto-detects the correct binary paths.
+
+### Upgrade
+
+```bash
+brew upgrade wwk
+wwk agent uninstall   # remove old agent registration
+wwk agent install     # re-register with updated binary paths
+```
+
+### Uninstall
+
+```bash
+wwk agent uninstall   # stop agent and remove login item
+brew uninstall wwk
+```
+
+### What Gets Installed
+
+| Path | Description |
+|------|-------------|
+| `$(brew --prefix)/bin/wwk` | CLI binary (symlinked to PATH) |
+| `$(brew --prefix)/bin/wwkd` | Agent binary (symlinked to PATH) |
+| `$(brew --prefix)/opt/wwk/WellWhaddyaKnow.app` | Menu bar GUI application |
+| `.app/Contents/MacOS/wwkd` | Agent copy with proper codesign identity (used by launchd) |
+| `~/Library/LaunchAgents/com.daylily.wellwhaddyaknow.agent.plist` | Created by `wwk agent install` |
+
+---
+
+## Permissions
+
+WellWhaddyaKnow requires specific macOS permissions to function. **Without these, tracking will not work or will be incomplete.**
+
+### 1. Accessibility (Required for Window Titles)
+
+The `wwkd` agent needs Accessibility permission to read window titles. Without it, the app still tracks which application is active, but window titles show as "unavailable".
+
+**How to grant:**
+
+1. Open **System Settings** → **Privacy & Security** → **Accessibility**
+2. Click the **+** button (you may need to unlock with your password first)
+3. Press **⌘+Shift+G** (Go to Folder) and paste:
+   ```
+   /opt/homebrew/opt/wwk/WellWhaddyaKnow.app
+   ```
+   On Intel Macs, use `/usr/local/opt/wwk/WellWhaddyaKnow.app` instead.
+   For non-standard Homebrew prefixes, run `brew --prefix` to find yours.
+4. Select **WellWhaddyaKnow.app** and click **Open**
+5. Ensure the toggle next to it is **ON** ✅
+
+> **Important:** Add `WellWhaddyaKnow.app` — **not** the standalone `wwkd` binary. The agent inside the app bundle is codesigned with a stable identifier (`com.daylily.wellwhaddyaknow.agent`) that macOS TCC can track. The standalone `wwkd` at `$(brew --prefix)/bin/wwkd` has a generic linker-signed identity that macOS **silently rejects** when you try to add it to Accessibility.
+
+**Alternatively**, use the GUI:
+1. Open the WWK menu bar app → **Preferences…** → **Permissions** tab
+2. Click **Request Permission** — this triggers the native macOS prompt
+
+### 2. Background Items (Login Item)
+
+When you run `wwk agent install`, macOS registers `wwkd` as a background login item. macOS may show a notification:
+
+> **"wwkd" wants to run in the background**
+
+Click **Allow** in the notification. If you missed it, enable it manually:
+
+1. Open **System Settings** → **General** → **Login Items & Extensions**
+2. Under **Allow in the Background**, find `wwkd` or `com.daylily.wellwhaddyaknow.agent`
+3. Ensure the toggle is **ON** ✅
+
+If this is disabled, the agent will not start automatically at login. You can still start it manually with `wwk agent start`, but it won't persist across reboots.
+
+### 3. Verify Permissions
+
+```bash
+wwk doctor
+```
+
+Expected output when everything is configured correctly:
+
+```
+System Health Check
+===================
+
+✓ Database: Database exists and passes integrity check
+✓ Agent: Agent is running (v0.6.x, uptime Xs)
+✓ Accessibility: Accessibility permission granted
+
+All checks passed.
+```
+
+### Troubleshooting Permissions
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Window titles show "unavailable" | Accessibility not granted | Grant Accessibility to `WellWhaddyaKnow.app` (not `wwkd` directly) |
+| Agent not running after reboot | Background item not allowed | Enable in System Settings → Login Items & Extensions |
+| `wwk doctor` shows agent not running | Plist not installed or agent crashed | Run `wwk agent install`, check `/tmp/com.daylily.wellwhaddyaknow.agent.stderr.log` |
+| Can't add `wwkd` to Accessibility | Binary lacks stable codesign identity | Add `WellWhaddyaKnow.app` instead — the agent inside it has the correct identity |
+| Permission granted but not working | Stale TCC cache | Toggle Accessibility OFF then ON, or restart your Mac |
+
+---
 
 ## Quick Start
 
 ```bash
-# Prerequisites: macOS 13+, Xcode 14+ (or Command Line Tools with Swift 6)
+# Prerequisites: macOS 13+, Homebrew
 
-# --- Option A: Homebrew ---
-brew tap Daylily-Informatics/tap
-brew install wwk                                             # CLI + agent
-brew install --cask Daylily-Informatics/tap/wellwhaddyaknow  # GUI app (requires sudo)
-wwk agent install                                            # register agent as login item
-open -a WellWhaddyaKnow                                     # launch the GUI
+# Install
+brew install Daylily-Informatics/tap/wwk
 
-# Non-admin users (no sudo): install the GUI to ~/Applications instead
-# mkdir -p ~/Applications
-# brew install --cask Daylily-Informatics/tap/wellwhaddyaknow --appdir=~/Applications
+# Set up agent (starts at login)
+wwk agent install
 
-# --- Option B: Build from source ---
-git clone https://github.com/Daylily-Informatics/well-whaddya-know.git
-cd well-whaddya-know
-./scripts/build-app.sh --release                             # builds .app bundle
-wwk agent install                                            # register agent as login item
-open .build/release/WellWhaddyaKnow.app                      # launch the GUI
+# Launch GUI (menu bar app)
+wwk gui
 
-# --- Verify ---
-wwk agent status    # confirm agent is running
-wwk status          # current tracking state
+# Grant Accessibility permission:
+#   System Settings → Privacy & Security → Accessibility → +
+#   Navigate to: /opt/homebrew/opt/wwk/WellWhaddyaKnow.app
+#   (see Permissions section above for detailed steps)
+
+# Verify everything works
+wwk doctor          # full health check
+wwk agent status    # agent process details
 wwk today           # today's time breakdown by app
 ```
 
@@ -260,19 +294,9 @@ Configure the app via **Preferences…** in the menu bar dropdown.
 
 ---
 
-## Usage
+## CLI Reference
 
-> *"Over time, you spend too much time thinking about what you need to do, and not doing what you need to do."*
-> — **Mel Robbins**
-
-### Menu Bar App
-
-1. Launch `WellWhaddyaKnow.app` (or install the cask — it appears in the menu bar automatically)
-2. Click the clock icon in the menu bar to see current status
-3. Click **Open Viewer** to see timeline, reports, tags, and export data
-4. Click **Preferences…** to configure display timezone, permissions, and the login-item agent
-
-### CLI Commands
+### Commands
 
 ```bash
 # Reporting
@@ -303,6 +327,9 @@ wwk agent start      # start agent (must be installed first)
 wwk agent stop       # stop agent
 wwk agent uninstall  # stop agent and remove launchd plist
 
+# GUI
+wwk gui              # launch the menu bar app
+
 # Diagnostics
 wwk doctor           # permissions, agent, db integrity
 wwk db info          # schema version, event counts, date ranges
@@ -326,6 +353,60 @@ wwk summary --from 2026-01-01 --to 2026-01-31 --json --timezone America/Chicago
 
 See [docs/cli.md](docs/cli.md) for the full CLI reference.
 
+## Build from Source
+
+Requires **Xcode 14+** (Swift 6.0) and **macOS 13+**.
+
+### GUI app (`.app` bundle)
+
+```bash
+git clone https://github.com/Daylily-Informatics/well-whaddya-know.git
+cd well-whaddya-know
+./scripts/build-app.sh            # debug build
+# or
+./scripts/build-app.sh --release  # optimized release build
+```
+
+The script builds `WellWhaddyaKnow`, `wwkd`, and `wwk`, assembles a signed `.app` bundle, and prints the path:
+
+```
+.build/debug/WellWhaddyaKnow.app    # debug
+.build/release/WellWhaddyaKnow.app  # release
+```
+
+To run:
+
+```bash
+open .build/release/WellWhaddyaKnow.app
+```
+
+### CLI only
+
+```bash
+git clone https://github.com/Daylily-Informatics/well-whaddya-know.git
+cd well-whaddya-know
+swift build -c release
+```
+
+Copy binaries to your PATH:
+
+```bash
+# System-wide (requires sudo)
+sudo cp .build/release/wwk .build/release/wwkd /usr/local/bin/
+
+# Single-user
+mkdir -p ~/.local/bin
+cp .build/release/wwk .build/release/wwkd ~/.local/bin/
+```
+
+Then install the agent:
+
+```bash
+wwk agent install
+```
+
+---
+
 ## Data Storage
 
 All data is stored locally in:
@@ -335,17 +416,6 @@ All data is stored locally in:
 ```
 
 The database uses SQLite with WAL mode and immutable append-only event tables. All timestamps are stored as UTC microseconds since Unix epoch. See [docs/datastore.md](docs/datastore.md) for the full schema.
-
-## Permissions
-
-### Accessibility Permission
-
-To capture window titles, grant Accessibility permission:
-
-1. Open **System Settings** → **Privacy & Security** → **Accessibility**
-2. Add `WellWhaddyaKnow.app` (and `wwkd` if running standalone)
-
-Without this permission, the app still tracks which application is active but window titles will show as "unavailable".
 
 ## Architecture
 
@@ -379,7 +449,7 @@ swift build -c release
 ./scripts/build-app.sh           # debug
 ./scripts/build-app.sh --release # release
 
-# Run tests (228 tests)
+# Run tests
 swift test
 ```
 
