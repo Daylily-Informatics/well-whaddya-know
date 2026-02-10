@@ -35,19 +35,40 @@ private var plistPath: String {
 
 // MARK: - Helpers
 
-/// Locate the wwkd binary: same dir as wwk → Homebrew paths → PATH
+/// Locate the wwkd binary.
+/// Prefer the app-bundle copy (properly codesigned with bundle identifier)
+/// over the standalone binary, because macOS TCC (Accessibility permissions)
+/// requires a stable code-signing identity to persist grants.
+/// Search order: app bundle → sibling of wwk → Homebrew paths → PATH
 private func findWwkdPath() -> String? {
+    // 1. Prefer the app-bundle copy — it has a proper codesign identity
+    //    (com.daylily.wellwhaddyaknow.agent) that macOS TCC can track.
+    let appBundleCandidates = [
+        "/opt/homebrew/opt/wwk/WellWhaddyaKnow.app/Contents/MacOS/wwkd",
+        "/usr/local/opt/wwk/WellWhaddyaKnow.app/Contents/MacOS/wwkd",
+    ]
+    for candidate in appBundleCandidates {
+        if FileManager.default.isExecutableFile(atPath: candidate) {
+            return candidate
+        }
+    }
+
+    // 2. Sibling of the wwk CLI binary (dev builds, non-Homebrew installs)
     let selfPath = CommandLine.arguments[0]
     let selfDir = (selfPath as NSString).deletingLastPathComponent
     let siblingPath = "\(selfDir)/wwkd"
     if FileManager.default.isExecutableFile(atPath: siblingPath) {
         return siblingPath
     }
+
+    // 3. Well-known Homebrew bin paths (fallback for standalone binary)
     for candidate in ["/opt/homebrew/bin/wwkd", "/usr/local/bin/wwkd"] {
         if FileManager.default.isExecutableFile(atPath: candidate) {
             return candidate
         }
     }
+
+    // 4. Search PATH
     if let pathEnv = ProcessInfo.processInfo.environment["PATH"] {
         for dir in pathEnv.split(separator: ":") {
             let candidate = "\(dir)/wwkd"
@@ -84,6 +105,8 @@ private func generatePlistContent(wwkdPath: String) -> String {
         <string>/tmp/\(launchdLabel).stderr.log</string>
         <key>ProcessType</key>
         <string>Background</string>
+        <key>AssociatedBundleIdentifiers</key>
+        <string>com.daylily.wellwhaddyaknow</string>
     </dict>
     </plist>
     """
