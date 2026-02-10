@@ -39,7 +39,7 @@ A **local-only** macOS time tracker that records how time passed on your machine
 ## Requirements
 
 - macOS 13 (Ventura) or later
-- Xcode 14+ or Command Line Tools with Swift 6 (build dependency only)
+- Xcode 14+ (must be downloaded from the App store) **and** Command Line Tools with Swift 6 (build dependency only)
 - Accessibility permission (for window title capture — see [Permissions](#permissions))
 
 ---
