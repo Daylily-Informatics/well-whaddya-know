@@ -1,8 +1,8 @@
-# Homebrew formula for wwk CLI
+# Homebrew formula for WellWhaddyaKnow — CLI, agent, and GUI
 # To install: brew tap Daylily-Informatics/tap && brew install wwk
 
 class Wwk < Formula
-  desc "CLI for WellWhaddyaKnow time tracker"
+  desc "macOS time tracker — CLI, background agent, and menu bar app"
   homepage "https://github.com/Daylily-Informatics/well-whaddya-know"
   url "https://github.com/Daylily-Informatics/well-whaddya-know/archive/refs/tags/0.5.1.tar.gz"
   sha256 "27ac14bceb343ecbd97b3d1a48011097aac7685a52a0c801d0b48ab3a419d1cb"
@@ -23,37 +23,81 @@ class Wwk < Formula
       }
     SWIFT
 
+    # Build all products (wwk, wwkd, WellWhaddyaKnow)
     system "swift", "build",
            "--configuration", "release",
            "--disable-sandbox",
            "-Xswiftc", "-cross-module-optimization"
+
+    # Install CLI and agent binaries
     bin.install ".build/release/wwk"
     bin.install ".build/release/wwkd"
+
+    # Construct WellWhaddyaKnow.app bundle
+    app_bundle = prefix/"WellWhaddyaKnow.app"
+    contents   = app_bundle/"Contents"
+    macos_dir  = contents/"MacOS"
+    resources  = contents/"Resources"
+    la_dir     = contents/"Library/LaunchAgents"
+
+    macos_dir.mkpath
+    resources.mkpath
+    la_dir.mkpath
+
+    cp ".build/release/WellWhaddyaKnow", macos_dir/"WellWhaddyaKnow"
+    cp ".build/release/wwkd",            macos_dir/"wwkd"
+
+    # Embed launchd plist (required for SMAppService)
+    cp "Sources/WellWhaddyaKnowApp/LaunchAgents/com.daylily.wellwhaddyaknow.agent.plist",
+       la_dir/"com.daylily.wellwhaddyaknow.agent.plist"
+
+    # Process Info.plist — substitute Xcode variables
+    info_plist = (buildpath/"Sources/WellWhaddyaKnowApp/Info.plist").read
+    info_plist.gsub!("$(EXECUTABLE_NAME)", "WellWhaddyaKnow")
+    info_plist.gsub!("$(PRODUCT_BUNDLE_IDENTIFIER)", "com.daylily.wellwhaddyaknow")
+    (contents/"Info.plist").write(info_plist)
+
+    cp "Sources/WellWhaddyaKnowApp/PrivacyInfo.xcprivacy", resources/"PrivacyInfo.xcprivacy"
+    (contents/"PkgInfo").write("APPL????")
+
+    # Ad-hoc codesign (inner → outer)
+    system "codesign", "--force", "--sign", "-",
+           "-i", "com.daylily.wellwhaddyaknow.agent",
+           macos_dir/"wwkd"
+    system "codesign", "--force", "--sign", "-",
+           macos_dir/"WellWhaddyaKnow"
+    system "codesign", "--force", "--sign", "-",
+           app_bundle.to_s
   end
 
   def caveats
     <<~EOS
-      wwk is the CLI and wwkd is the background agent for WellWhaddyaKnow.
+      WellWhaddyaKnow — macOS time tracker (CLI + agent + GUI).
 
-      Start the agent:
-        wwkd &
+      Quick start:
+        wwk agent install     # Register agent as login item
+        wwk gui               # Launch the menu bar app
+        wwk status            # Show current tracking status
 
-      Usage:
-        wwk status          # Show current status
-        wwk today           # Today's summary
-        wwk week            # This week's summary
-        wwk --help          # Full command reference
+      Agent management:
+        wwk agent status      # Check agent status
+        wwk agent start       # Start the agent
+        wwk agent stop        # Stop the agent
+        wwk agent uninstall   # Remove login item
 
-      For the menu bar UI, build WellWhaddyaKnow.app from source:
-        git clone https://github.com/Daylily-Informatics/well-whaddya-know.git
-        cd well-whaddya-know && bash scripts/build-app.sh --release
-        open .build/release/WellWhaddyaKnow.app
+      Reporting:
+        wwk today             # Today's summary
+        wwk week              # This week's summary
+        wwk --help            # Full command reference
+
+      GUI app location:
+        #{opt_prefix}/WellWhaddyaKnow.app
     EOS
   end
 
   test do
-    # Test that the CLI runs and shows help
     assert_match "USAGE: wwk", shell_output("#{bin}/wwk --help")
+    assert_match "gui", shell_output("#{bin}/wwk --help")
   end
 end
 

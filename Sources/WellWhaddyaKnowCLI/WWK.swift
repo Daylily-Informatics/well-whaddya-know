@@ -21,6 +21,7 @@ struct WWK: AsyncParsableCommand {
             Edit.self,
             Tag.self,
             Agent.self,
+            GUI.self,
             Doctor.self,
             DB.self,
         ],
