@@ -4,5 +4,5 @@
 public enum BuildVersion {
     /// Semantic version derived from `git describe --tags --always`.
     /// Format: "X.Y.Z" on exact tag, "X.Y.Z-N-gHASH" between tags.
-    public static let version: String = "0.5.0-4-g0f68723"
+    public static let version: String = "0.5.1"
 }
