@@ -57,14 +57,12 @@ Most macOS users have admin (sudo) access. This is the default Homebrew setup.
 brew install Daylily-Informatics/tap/wwk
 
 # Step 2: Register the agent as a login item (starts automatically at login)
-wwk agent install
+wwk agent install # if fails, try running with sudo... and if that fails! Move on and try the gui install path.
 
 # Step 3: Launch the GUI (menu bar app — look for the icon in your menu bar)
-wwk gui
-# or equivalently:
-open $(brew --prefix)/opt/wwk/WellWhaddyaKnow.app
+wwk gui  # when first started, it will ask for some permissions, allow them. open the gui eye, the choose preferences, Request Accessibility permissions, refresh. If this fails, close the prefernces, reopen and try again *then* change to the diagnostic tab, scroll down and click register agent then refresh button.  Go back to permissions and  stop and then start the background agent. all should be green... and you are good to go.
 
-# Step 4: Grant permissions (see Permissions section below)
+# Step 4: Grant permissions (see Permissions section below) - may not be necessary if gui path worked
 
 # Step 5: Verify
 wwk agent status    # confirm agent is running
@@ -72,22 +70,6 @@ wwk doctor          # full health check
 wwk today           # today's time breakdown
 ```
 
-### Non-Admin Install (local user, no sudo)
-
-If Homebrew is installed in your home directory (e.g., `~/.homebrew`) or you don't have admin access:
-
-```bash
-# Step 1: Install (same command — Homebrew handles local installs)
-brew install Daylily-Informatics/tap/wwk
-
-# Step 2: Register the agent
-wwk agent install
-
-# Step 3: Launch the GUI
-wwk gui
-
-# Step 4: Grant permissions (see Permissions section below)
-```
 
 > **Note:** The formula builds from source, so it works regardless of whether Homebrew is in `/opt/homebrew` (default on Apple Silicon), `/usr/local` (default on Intel), or a user-local prefix. The `wwk agent install` command auto-detects the correct binary paths.
 
