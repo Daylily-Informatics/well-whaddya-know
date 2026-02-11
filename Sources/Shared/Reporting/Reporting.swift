@@ -216,3 +216,96 @@ public enum JSONExporter {
     }
 }
 
+// MARK: - Markdown Invoice Export
+
+/// Exports a Markdown-formatted invoice of tasks in a time range.
+public enum InvoiceExporter {
+
+    /// Generate a Markdown invoice aggregated by app (and optionally window title).
+    /// - Parameters:
+    ///   - segments: Effective segments for the invoice period
+    ///   - identity: Machine / user identity
+    ///   - rangeStart: Invoice period start (Date)
+    ///   - rangeEnd: Invoice period end (Date)
+    ///   - includeTitles: Whether to break down by window title
+    ///   - tzOffsetSeconds: Timezone offset for display
+    /// - Returns: Complete Markdown string
+    public static func export(
+        segments: [EffectiveSegment],
+        identity: ReportIdentity,
+        rangeStart: Date,
+        rangeEnd: Date,
+        includeTitles: Bool = true,
+        tzOffsetSeconds: Int = TimeZone.current.secondsFromGMT()
+    ) -> String {
+        let dateFmt = DateFormatter()
+        dateFmt.dateStyle = .medium
+        dateFmt.timeStyle = .short
+        dateFmt.timeZone = TimeZone(secondsFromGMT: tzOffsetSeconds)
+
+        let observed = segments.filter { $0.coverage == .observed }
+        let totalSeconds = observed.reduce(0.0) { $0 + $1.durationSeconds }
+
+        var md = "# Invoice\n\n"
+        md += "| Field | Value |\n|-------|-------|\n"
+        md += "| **Date Range** | \(dateFmt.string(from: rangeStart)) — \(dateFmt.string(from: rangeEnd)) |\n"
+        md += "| **Machine** | \(identity.machineId) |\n"
+        md += "| **User** | \(identity.username) |\n"
+        md += "| **Generated** | \(dateFmt.string(from: Date())) |\n\n"
+
+        // Aggregate by app
+        var byApp: [String: Double] = [:]
+        var byAppWindow: [String: [String: Double]] = [:]
+        for seg in observed {
+            let app = seg.appName.isEmpty ? "(unknown)" : seg.appName
+            byApp[app, default: 0] += seg.durationSeconds
+            if includeTitles {
+                let title = seg.windowTitle ?? "(no title)"
+                byAppWindow[app, default: [:]][title, default: 0] += seg.durationSeconds
+            }
+        }
+
+        let sortedApps = byApp.sorted { $0.value > $1.value }
+
+        md += "## Tasks\n\n"
+
+        if includeTitles {
+            md += "| Application | Window / Task | Duration | % of Total |\n"
+            md += "|-------------|---------------|----------|------------|\n"
+            for (app, _) in sortedApps {
+                let windows = (byAppWindow[app] ?? [:]).sorted { $0.value > $1.value }
+                for (title, secs) in windows {
+                    let pct = totalSeconds > 0 ? secs / totalSeconds * 100 : 0
+                    md += "| \(app) | \(title) | \(formatDuration(secs)) | \(String(format: "%.1f%%", pct)) |\n"
+                }
+            }
+        } else {
+            md += "| Application | Duration | % of Total |\n"
+            md += "|-------------|----------|------------|\n"
+            for (app, secs) in sortedApps {
+                let pct = totalSeconds > 0 ? secs / totalSeconds * 100 : 0
+                md += "| \(app) | \(formatDuration(secs)) | \(String(format: "%.1f%%", pct)) |\n"
+            }
+        }
+
+        md += "\n## Summary\n\n"
+        md += "| Metric | Value |\n|--------|-------|\n"
+        md += "| **Total Tracked Time** | \(formatDuration(totalSeconds)) |\n"
+        md += "| **Total Hours** | \(String(format: "%.2f", totalSeconds / 3600.0)) |\n"
+        md += "| **Unique Applications** | \(byApp.count) |\n"
+        md += "| **Segments** | \(observed.count) |\n"
+
+        return md
+    }
+
+    private static func formatDuration(_ seconds: Double) -> String {
+        let total = Int(seconds)
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        if h > 0 { return String(format: "%dh %02dm", h, m) }
+        if m > 0 { return String(format: "%dm %02ds", m, s) }
+        return "\(s)s"
+    }
+}
+

@@ -516,6 +516,74 @@ final class ViewerViewModel: ObservableObject {
             errorMessage = "Create+apply tag failed: \(error.localizedDescription)"
         }
     }
+
+    // MARK: - Assume Inactive
+
+    /// Scan current timeline for gaps > 60 seconds and create inactive-asleep
+    /// segments to fill them. Returns the number of gaps filled.
+    @discardableResult
+    func assumeInactive() async -> Int {
+        guard segments.count >= 2 else { return 0 }
+
+        var gapsToFill: [(startTsUs: Int64, endTsUs: Int64)] = []
+
+        for i in 0 ..< (segments.count - 1) {
+            let current = segments[i]
+            let next = segments[i + 1]
+            let gapSec = next.startTime.timeIntervalSince(current.endTime)
+            if gapSec > 60.0 {
+                let startUs = Int64(current.endTime.timeIntervalSince1970 * 1_000_000)
+                let endUs   = Int64(next.startTime.timeIntervalSince1970 * 1_000_000)
+                gapsToFill.append((startTsUs: startUs, endTsUs: endUs))
+            }
+        }
+
+        guard !gapsToFill.isEmpty else {
+            errorMessage = "No gaps > 60 s found"
+            return 0
+        }
+
+        var created = 0
+        for gap in gapsToFill {
+            let request = AddRangeRequest(
+                startTsUs: gap.startTsUs,
+                endTsUs: gap.endTsUs,
+                appName: "inactive-asleep",
+                bundleId: "com.daylily.wellwhaddyaknow.inactive",
+                title: nil,
+                tags: [],
+                note: "Auto-generated inactive segment"
+            )
+            do {
+                let _ = try await xpcClient.addRange(request)
+                created += 1
+            } catch {
+                errorMessage = "Failed to create inactive segment: \(error.localizedDescription)"
+                break
+            }
+        }
+
+        // Reload so the new segments appear
+        await loadTimelineForRange()
+        return created
+    }
+
+    // MARK: - Seek Corrupt (Overlapping) Segments
+
+    /// Detect overlapping segments in the current timeline.
+    /// Returns pairs where the first segment's end > the second segment's start.
+    func findOverlappingSegments() -> [(TimelineSegment, TimelineSegment)] {
+        guard segments.count >= 2 else { return [] }
+        var overlaps: [(TimelineSegment, TimelineSegment)] = []
+        for i in 0 ..< (segments.count - 1) {
+            let current = segments[i]
+            let next = segments[i + 1]
+            if current.endTime > next.startTime {
+                overlaps.append((current, next))
+            }
+        }
+        return overlaps
+    }
 }
 
 /// Row for report tables
@@ -565,6 +633,10 @@ struct TagItem: Identifiable {
 
 struct TimelineTabView: View {
     @ObservedObject var viewModel: ViewerViewModel
+    @State private var assumeInactiveCount: Int? = nil
+    @State private var showingAssumeInactiveAlert = false
+    @State private var overlappingPairs: [(TimelineSegment, TimelineSegment)] = []
+    @State private var showingCorruptSheet = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -605,28 +677,176 @@ struct TimelineTabView: View {
                 TimelineListView(segments: viewModel.segments, viewModel: viewModel)
             }
 
-            // Segment count + error
-            HStack {
+            Divider()
+
+            // Bottom toolbar: segment count + action buttons + error
+            HStack(spacing: 12) {
                 if !viewModel.segments.isEmpty {
                     Text("\(viewModel.segments.count) segment\(viewModel.segments.count == 1 ? "" : "s")")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
+
                 Spacer()
+
+                // Assume Inactive — fill gaps > 60 s
+                Button {
+                    Task {
+                        let count = await viewModel.assumeInactive()
+                        assumeInactiveCount = count
+                        showingAssumeInactiveAlert = true
+                    }
+                } label: {
+                    Label("Assume Inactive", systemImage: "moon.zzz")
+                }
+                .controlSize(.small)
+                .help("Create inactive-asleep segments for all gaps > 60 s")
+
+                // Seek Corrupt Segments — find overlaps
+                Button {
+                    overlappingPairs = viewModel.findOverlappingSegments()
+                    showingCorruptSheet = true
+                } label: {
+                    Label("Seek Corrupt", systemImage: "exclamationmark.triangle")
+                }
+                .controlSize(.small)
+                .help("Find overlapping segments that shouldn't exist")
+
                 if let errorMessage = viewModel.errorMessage {
                     Text(errorMessage)
                         .foregroundColor(.red)
                         .font(.caption)
+                        .lineLimit(1)
                 }
             }
             .padding(.horizontal)
-            .padding(.vertical, 4)
+            .padding(.vertical, 6)
         }
         .task {
             await viewModel.applyPreset(.today)
         }
+        .alert("Assume Inactive", isPresented: $showingAssumeInactiveAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            if let count = assumeInactiveCount, count > 0 {
+                Text("Created \(count) inactive segment\(count == 1 ? "" : "s").")
+            } else {
+                Text(viewModel.errorMessage ?? "No gaps > 60 s found.")
+            }
+        }
+        .sheet(isPresented: $showingCorruptSheet) {
+            CorruptSegmentsSheet(
+                pairs: overlappingPairs,
+                viewModel: viewModel,
+                isPresented: $showingCorruptSheet
+            )
+        }
     }
 }
+
+// MARK: - Corrupt Segments Sheet
+
+/// Sheet that displays overlapping segment pairs and lets the user delete one.
+struct CorruptSegmentsSheet: View {
+    let pairs: [(TimelineSegment, TimelineSegment)]
+    @ObservedObject var viewModel: ViewerViewModel
+    @Binding var isPresented: Bool
+
+    private static let timeFmt: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .medium
+        f.timeZone = DisplayTimezoneHelper.preferred
+        return f
+    }()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Overlapping Segments")
+                    .font(.headline)
+                Spacer()
+                Button("Done") { isPresented = false }
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding()
+
+            Divider()
+
+            if pairs.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.system(size: 48))
+                        .foregroundColor(.green)
+                    Text("No overlapping segments found")
+                        .font(.title3)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(Array(pairs.enumerated()), id: \.offset) { idx, pair in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Overlap #\(idx + 1)")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+
+                            overlapRow(label: "A", seg: pair.0) {
+                                Task {
+                                    await viewModel.deleteRange(
+                                        startTime: pair.0.startTime,
+                                        endTime: pair.0.endTime,
+                                        note: "Deleted overlapping segment via Seek Corrupt"
+                                    )
+                                    isPresented = false
+                                }
+                            }
+
+                            overlapRow(label: "B", seg: pair.1) {
+                                Task {
+                                    await viewModel.deleteRange(
+                                        startTime: pair.1.startTime,
+                                        endTime: pair.1.endTime,
+                                        note: "Deleted overlapping segment via Seek Corrupt"
+                                    )
+                                    isPresented = false
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+        }
+        .frame(minWidth: 560, minHeight: 340)
+    }
+
+    @ViewBuilder
+    private func overlapRow(label: String, seg: TimelineSegment, onDelete: @escaping () -> Void) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(label): \(seg.appName)")
+                    .fontWeight(.medium)
+                if let title = seg.windowTitle {
+                    Text(title)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                Text("\(Self.timeFmt.string(from: seg.startTime)) → \(Self.timeFmt.string(from: seg.endTime))")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            Button(role: .destructive) {
+                onDelete()
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            .controlSize(.small)
+        }
+    }
+}
+
 
 struct DateNavigationBar: View {
     @Binding var selectedDate: Date
@@ -1415,6 +1635,9 @@ struct ReportsTabView: View {
                         Button("Export CSV…") {
                             exportReportsCSV(data: data, grouping: selectedGrouping)
                         }
+                        Button("Export Invoice…") {
+                            exportReportsInvoice()
+                        }
                         .padding()
                     }
 
@@ -1484,6 +1707,43 @@ struct ReportsTabView: View {
             try csv.write(to: url, atomically: true, encoding: .utf8)
         } catch {
             print("[Reports] CSV export failed: \(error)")
+        }
+    }
+
+    private func exportReportsInvoice() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+        panel.nameFieldStringValue = "invoice.md"
+        panel.title = "Export Invoice"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        Task {
+            guard let identity = await ViewerDatabaseReader.loadIdentity() else {
+                print("[Reports] Failed to load identity for invoice")
+                return
+            }
+
+            let reportIdentity = ReportIdentity(
+                machineId: identity.machineId,
+                username: identity.username,
+                uid: identity.uid
+            )
+
+            let markdown = InvoiceExporter.export(
+                segments: viewModel.reportSegments,
+                identity: reportIdentity,
+                rangeStart: viewModel.reportStartTime,
+                rangeEnd: viewModel.reportEndTime,
+                includeTitles: true,
+                tzOffsetSeconds: DisplayTimezoneHelper.preferred.secondsFromGMT()
+            )
+
+            do {
+                try markdown.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                print("[Reports] Invoice export failed: \(error)")
+            }
         }
     }
 }
