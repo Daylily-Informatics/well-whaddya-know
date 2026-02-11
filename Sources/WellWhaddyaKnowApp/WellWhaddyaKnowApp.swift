@@ -19,15 +19,47 @@ struct WellWhaddyaKnowApp: App {
 }
 
 /// App delegate that manages the menu bar status item and popover.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarController: MenuBarController?
+    private var sleepObserver: NSObjectProtocol?
+    private var wakeObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Initialize the menu bar controller
         menuBarController = MenuBarController()
+
+        // Observe sleep/wake so the GUI refreshes after the system wakes.
+        sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.menuBarController?.prepareForSleep()
+            }
+        }
+
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.menuBarController?.refreshAfterWake()
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Remove sleep/wake observers
+        if let obs = sleepObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(obs)
+        }
+        if let obs = wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(obs)
+        }
+
         // Clean up resources
         menuBarController?.stopPolling()
 

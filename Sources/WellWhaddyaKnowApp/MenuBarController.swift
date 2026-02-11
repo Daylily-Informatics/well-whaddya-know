@@ -172,6 +172,30 @@ final class MenuBarController: NSObject {
         stateObserverTask?.cancel()
         stateObserverTask = nil
     }
+
+    // MARK: - Sleep/Wake Support
+
+    /// Called just before the system sleeps. Pause polling to avoid
+    /// accumulating stale refresh attempts while the network and IPC
+    /// socket are unavailable.
+    func prepareForSleep() {
+        wwkLog.info("System going to sleep — pausing polling")
+        viewModel.stopPolling()
+    }
+
+    /// Called after the system wakes. Give the agent a moment to
+    /// re-establish its IPC socket, then force a full status refresh
+    /// and resume the normal polling cadence.
+    func refreshAfterWake() {
+        wwkLog.info("System woke — refreshing status")
+        Task {
+            // Brief delay so the agent can re-open its socket after wake
+            try? await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 s
+            await viewModel.refreshStatus()
+            viewModel.startPolling()
+            startStateObserver()
+        }
+    }
 }
 
 /// A recent activity entry for display in the popover.
