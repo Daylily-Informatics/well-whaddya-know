@@ -24,6 +24,10 @@ final class DatabaseReader {
             let msg = db.map { String(cString: sqlite3_errmsg($0)) } ?? "Unknown error"
             throw CLIError.databaseError(message: msg)
         }
+
+        // Performance PRAGMAs for read-only connection
+        sqlite3_exec(db, "PRAGMA cache_size = -8000;", nil, nil, nil)
+        sqlite3_exec(db, "PRAGMA mmap_size = 268435456;", nil, nil, nil)
     }
 
     deinit {
@@ -58,7 +62,7 @@ final class DatabaseReader {
     func buildTimeline(startTsUs: Int64, endTsUs: Int64) throws -> [EffectiveSegment] {
         let systemEvents = try loadSystemStateEvents(start: startTsUs, end: endTsUs)
         let activityEvents = try loadRawActivityEvents(start: startTsUs, end: endTsUs)
-        let editEvents = try loadUserEditEvents()
+        let editEvents = try loadUserEditEvents(start: startTsUs, end: endTsUs)
 
         return buildEffectiveTimeline(
             systemStateEvents: systemEvents,
@@ -159,8 +163,10 @@ final class DatabaseReader {
 
     // MARK: - User Edit Events
 
-    private func loadUserEditEvents() throws -> [UserEditEvent] {
+    private func loadUserEditEvents(start: Int64, end: Int64) throws -> [UserEditEvent] {
         var events: [UserEditEvent] = []
+        // Use UNION ALL so SQLite can use idx_uee_range for the range branch
+        // and idx_uee_op for the undo_edit branch, instead of a full table scan.
         let sql = """
             SELECT u.uee_id, u.created_ts_us, u.created_monotonic_ns,
                    u.author_username, u.author_uid, u.client, u.client_version,
@@ -170,7 +176,18 @@ final class DatabaseReader {
                    u.note, u.target_uee_id, u.payload_json
             FROM user_edit_events u
             LEFT JOIN tags t ON u.tag_id = t.tag_id
-            ORDER BY u.created_ts_us;
+            WHERE u.start_ts_us < ? AND u.end_ts_us > ?
+            UNION ALL
+            SELECT u.uee_id, u.created_ts_us, u.created_monotonic_ns,
+                   u.author_username, u.author_uid, u.client, u.client_version,
+                   u.op, u.start_ts_us, u.end_ts_us,
+                   u.tag_id, t.name,
+                   u.manual_app_bundle_id, u.manual_app_name, u.manual_window_title,
+                   u.note, u.target_uee_id, u.payload_json
+            FROM user_edit_events u
+            LEFT JOIN tags t ON u.tag_id = t.tag_id
+            WHERE u.op = 'undo_edit'
+            ORDER BY created_ts_us;
             """
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }
@@ -178,6 +195,8 @@ final class DatabaseReader {
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw CLIError.databaseError(message: String(cString: sqlite3_errmsg(db)))
         }
+        sqlite3_bind_int64(stmt, 1, end)
+        sqlite3_bind_int64(stmt, 2, start)
 
         while sqlite3_step(stmt) == SQLITE_ROW {
             let event = UserEditEvent(

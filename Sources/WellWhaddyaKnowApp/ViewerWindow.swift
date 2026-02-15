@@ -168,6 +168,19 @@ final class ViewerViewModel: ObservableObject {
     /// All loaded segments before filter — kept so filter toggle doesn't re-query DB
     private var allReportSegments: [EffectiveSegment] = []
 
+    /// Timeline cache: avoids re-reading DB + rebuilding timeline for identical ranges.
+    /// Keyed by (startTsUs, endTsUs). Invalidated by any edit operation.
+    private struct CacheKey: Hashable {
+        let startTsUs: Int64
+        let endTsUs: Int64
+    }
+    private var timelineCache: [CacheKey: [EffectiveSegment]] = [:]
+
+    /// Invalidate all cached timelines (called after any edit operation)
+    private func invalidateTimelineCache() {
+        timelineCache.removeAll()
+    }
+
     private let xpcClient = XPCClient()
 
     /// Reset time pickers to full-day range for the given date
@@ -214,11 +227,21 @@ final class ViewerViewModel: ObservableObject {
         }
         errorMessage = nil
 
-        // Read timeline from database
-        let effectiveSegments = await ViewerDatabaseReader.loadTimeline(
-            startTsUs: startTsUs,
-            endTsUs: endTsUs
-        )
+        // Check cache before hitting the database
+        let cacheKey = CacheKey(startTsUs: startTsUs, endTsUs: endTsUs)
+        let effectiveSegments: [EffectiveSegment]
+        if let cached = timelineCache[cacheKey] {
+            print("[ViewerVM] Cache HIT for range \(startTsUs)..\(endTsUs)")
+            effectiveSegments = cached
+        } else {
+            print("[ViewerVM] Cache MISS — loading from DB")
+            let loaded = await ViewerDatabaseReader.loadTimeline(
+                startTsUs: startTsUs,
+                endTsUs: endTsUs
+            )
+            timelineCache[cacheKey] = loaded
+            effectiveSegments = loaded
+        }
 
         print("[ViewerVM] effectiveSegments count: \(effectiveSegments.count)")
 
@@ -302,7 +325,7 @@ final class ViewerViewModel: ObservableObject {
 
         do {
             let _ = try await xpcClient.deleteRange(request)
-            // Reload timeline after edit
+            invalidateTimelineCache()
             await loadTimeline(for: selectedDate)
         } catch {
             errorMessage = "Delete failed: \(error.localizedDescription)"
@@ -321,7 +344,7 @@ final class ViewerViewModel: ObservableObject {
 
         do {
             let _ = try await xpcClient.applyTag(request)
-            // Reload timeline after edit
+            invalidateTimelineCache()
             await loadTimeline(for: selectedDate)
         } catch {
             errorMessage = "Apply tag failed: \(error.localizedDescription)"
@@ -340,7 +363,7 @@ final class ViewerViewModel: ObservableObject {
 
         do {
             let _ = try await xpcClient.removeTag(request)
-            // Reload timeline after edit
+            invalidateTimelineCache()
             await loadTimeline(for: selectedDate)
         } catch {
             errorMessage = "Remove tag failed: \(error.localizedDescription)"
@@ -392,12 +415,23 @@ final class ViewerViewModel: ObservableObject {
             return
         }
 
-        let segments = await ViewerDatabaseReader.loadTimeline(
-            startTsUs: startTsUs,
-            endTsUs: endTsUs
-        )
+        // Check cache before hitting the database
+        let cacheKey = CacheKey(startTsUs: startTsUs, endTsUs: endTsUs)
+        let loaded: [EffectiveSegment]
+        if let cached = timelineCache[cacheKey] {
+            print("[ViewerVM] Reports cache HIT")
+            loaded = cached
+        } else {
+            print("[ViewerVM] Reports cache MISS — loading from DB")
+            let fromDB = await ViewerDatabaseReader.loadTimeline(
+                startTsUs: startTsUs,
+                endTsUs: endTsUs
+            )
+            timelineCache[cacheKey] = fromDB
+            loaded = fromDB
+        }
 
-        allReportSegments = segments
+        allReportSegments = loaded
         recomputeReportAggregations()
     }
 
@@ -563,7 +597,8 @@ final class ViewerViewModel: ObservableObject {
             }
         }
 
-        // Reload so the new segments appear
+        // Invalidate cache and reload so the new segments appear
+        invalidateTimelineCache()
         await loadTimelineForRange()
         return created
     }

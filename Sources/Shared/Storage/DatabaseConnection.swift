@@ -71,18 +71,25 @@ public final class DatabaseConnection {
     private func applyRequiredPragmas() throws {
         // foreign_keys = ON - Enable foreign key constraint enforcement
         try executePragma("PRAGMA foreign_keys = ON;")
-        
+
         // journal_mode = WAL - Write-Ahead Logging for better concurrency
         try executePragma("PRAGMA journal_mode = WAL;")
-        
+
         // synchronous = NORMAL - Balance between safety and performance
         try executePragma("PRAGMA synchronous = NORMAL;")
-        
+
         // busy_timeout = 5000 - Wait up to 5 seconds when database is locked
         try executePragma("PRAGMA busy_timeout = 5000;")
-        
+
         // temp_store = MEMORY - Store temporary tables in memory
         try executePragma("PRAGMA temp_store = MEMORY;")
+
+        // Performance tuning: 8 MB page cache (default is 2 MB)
+        try executePragma("PRAGMA cache_size = -8000;")
+
+        // Performance tuning: memory-map up to 256 MB of the DB file.
+        // For a ~4 MB DB this maps the entire file, avoiding read syscalls.
+        try executePragma("PRAGMA mmap_size = 268435456;")
     }
     
     /// Executes a PRAGMA statement
