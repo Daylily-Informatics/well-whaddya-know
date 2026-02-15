@@ -12,7 +12,7 @@ import UniformTypeIdentifiers
 /// Viewer/Editor window with Timeline, Tags, and Exports tabs
 struct ViewerWindow: View {
     @StateObject private var viewModel = ViewerViewModel()
-    @State private var selectedTab: ViewerTab = .timeline
+    @State private var selectedTab: ViewerTab = .reports
 
     var body: some View {
         NavigationSplitView {
@@ -36,14 +36,14 @@ struct ViewerWindow: View {
             }
             .navigationTitle(selectedTab.title)
         }
-        .frame(minWidth: 800, maxWidth: .infinity, minHeight: 500, maxHeight: .infinity)
+        .frame(minWidth: 800, maxWidth: .infinity, minHeight: 600, maxHeight: .infinity)
     }
 }
 
 /// Tab options for the viewer window
 enum ViewerTab: String, CaseIterable, Identifiable {
-    case timeline
     case reports
+    case timeline
     case tags
     case exports
 
@@ -1878,6 +1878,45 @@ struct ReportsTabView: View {
     }
 }
 
+// MARK: - Dynamic Color Palette
+
+/// Generates visually distinct, non-repeating colors for chart categories.
+/// Uses hand-picked seed colors for the first 12, then golden-ratio hue
+/// stepping to produce unlimited unique colors beyond that.
+enum DynamicPalette {
+    private static let seedColors: [Color] = [
+        .blue, .green, .orange, .purple, .red,
+        .cyan, .yellow, .pink, .mint, .indigo,
+        .brown, .teal
+    ]
+
+    /// Generate `count` distinct colors that never repeat.
+    static func colors(count: Int) -> [Color] {
+        guard count > seedColors.count else {
+            return Array(seedColors.prefix(count))
+        }
+        var result = seedColors
+        let goldenRatio = 0.618033988749895
+        var hue = 0.07 // start offset to avoid seed-hue overlap
+        let extra = count - seedColors.count
+        for i in 0..<extra {
+            let band = Double(i % 3)
+            let saturation = 0.50 + 0.20 * band   // 0.50, 0.70, 0.90
+            let brightness = (i / 3) % 2 == 0 ? 0.80 : 0.65
+            result.append(Color(hue: hue, saturation: saturation, brightness: brightness))
+            hue += goldenRatio
+            hue = hue.truncatingRemainder(dividingBy: 1.0)
+        }
+        return result
+    }
+
+    /// Color for the category at `index` among `totalCount` active categories.
+    static func color(at index: Int, of totalCount: Int) -> Color {
+        let all = colors(count: max(totalCount, 1))
+        return all[index % all.count]
+    }
+}
+
 struct ReportsChartView: View {
     let data: [ReportRow]
     let grouping: ReportGrouping
@@ -1885,6 +1924,19 @@ struct ReportsChartView: View {
     @State private var hoveredLabel: String?
 
     private var isProportional: Bool { displayMode == .proportional }
+
+    /// Ordered unique categories for color assignment
+    private var chartCategories: [String] {
+        var seen = Set<String>()
+        var ordered: [String] = []
+        for row in data.prefix(15) {
+            let cat = chartColor(for: row)
+            if seen.insert(cat).inserted {
+                ordered.append(cat)
+            }
+        }
+        return ordered
+    }
 
     /// Max value across visible rows — used to decide whether a bar is wide enough for annotation
     private var maxValue: Double {
@@ -1936,6 +1988,10 @@ struct ReportsChartView: View {
                 AxisMarks(position: .leading)
             }
             .chartLegend(.hidden)
+            .chartForegroundStyleScale(
+                domain: chartCategories,
+                range: chartCategories.map { colorForCategory($0, in: chartCategories) }
+            )
             .chartOverlay { proxy in
                 GeometryReader { _ in
                     Rectangle()
@@ -2003,9 +2059,8 @@ struct ReportsChartView: View {
 
     private func colorForCategory(_ category: String, in categories: [String]) -> Color {
         if category == "Inactive" || category == "(unobserved)" { return .gray }
-        let palette: [Color] = [.blue, .green, .orange, .purple, .red, .cyan, .yellow, .pink, .mint, .indigo, .brown, .teal]
         guard let idx = categories.firstIndex(of: category) else { return .gray }
-        return palette[idx % palette.count]
+        return DynamicPalette.color(at: idx, of: categories.count)
     }
 
     private func chartLabel(for row: ReportRow) -> String {
@@ -2112,6 +2167,18 @@ struct BarChartView: View {
     @State private var hoveredPeriod: String? = nil
 
     private var isProportional: Bool { displayMode == .proportional }
+
+    /// Ordered unique categories for stable color assignment
+    private var uniqueCategories: [String] {
+        var seen = Set<String>()
+        var ordered: [String] = []
+        for pt in dataPoints {
+            if seen.insert(pt.category).inserted {
+                ordered.append(pt.category)
+            }
+        }
+        return ordered
+    }
 
     private var periodGroupBy: Aggregations.PeriodGroupBy {
         switch grouping {
@@ -2224,6 +2291,12 @@ struct BarChartView: View {
                 .chartXAxisLabel(xAxisLabel)
                 .chartYAxisLabel(isProportional ? "% of Total" : "Minutes")
                 .chartLegend(position: .bottom, spacing: 8)
+                .chartForegroundStyleScale(
+                    domain: uniqueCategories,
+                    range: uniqueCategories.enumerated().map { idx, _ in
+                        DynamicPalette.color(at: idx, of: uniqueCategories.count)
+                    }
+                )
                 .frame(minHeight: 300, idealHeight: 400, maxHeight: .infinity)
                 .chartOverlay { proxy in
                     GeometryReader { _ in
@@ -2535,17 +2608,11 @@ struct TimelineGanttView: View {
         }
     }
 
-    private let palette: [Color] = [
-        .blue, .green, .orange, .purple, .red,
-        .cyan, .yellow, .pink, .mint, .indigo,
-        .brown, .teal
-    ]
-
     private func colorFor(_ label: String) -> Color {
         if label == "⏸ Gap" { return .gray }
         let labels = sortedLabels.filter { $0 != "⏸ Gap" }
         guard let idx = labels.firstIndex(of: label) else { return .gray }
-        return palette[idx % palette.count]
+        return DynamicPalette.color(at: idx, of: labels.count)
     }
 }
 
@@ -2767,14 +2834,8 @@ struct SpaceFillCubeView: View {
         return rects
     }
 
-    private let palette: [Color] = [
-        .blue, .green, .orange, .purple, .red,
-        .cyan, .yellow, .pink, .mint, .indigo,
-        .brown, .teal
-    ]
-
     private func colorFor(_ label: String, at idx: Int, labels: [String]) -> Color {
         if label == "Inactive" || label == "(untagged)" { return .gray }
-        return palette[idx % palette.count]
+        return DynamicPalette.color(at: idx, of: labels.count)
     }
 }
