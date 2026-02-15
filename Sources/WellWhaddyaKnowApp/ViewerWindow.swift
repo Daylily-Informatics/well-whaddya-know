@@ -1667,12 +1667,14 @@ struct ReportsTabView: View {
                     switch visualizationMode {
                     case .table:
                         ReportsChartView(data: data, grouping: selectedGrouping, displayMode: displayMode)
+                            .id(displayMode)
                             .frame(minHeight: 280, idealHeight: 320, maxHeight: .infinity)
                             .padding()
 
                         Divider()
 
                         ReportsTableView(data: data, grouping: selectedGrouping, displayMode: displayMode)
+                            .id(displayMode)
 
                     case .hourlyBar:
                         HourlyBarChartView(
