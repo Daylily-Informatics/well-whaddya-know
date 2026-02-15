@@ -12,7 +12,7 @@ WellWhaddyaKnow uses an **event-sourcing architecture** where all state changes 
 │  (popover)      │   (window)          │        (wwk)            │
 └────────┬────────┴──────────┬──────────┴────────────┬────────────┘
          │                   │                       │
-         │              XPC Protocol                 │
+         │         JSON-RPC (Unix socket)             │
          │                   │                       │
          ▼                   ▼                       ▼
 ┌─────────────────────────────────────────────────────────────────┐

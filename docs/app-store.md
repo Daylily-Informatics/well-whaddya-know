@@ -100,7 +100,7 @@ Each target requires a `PrivacyInfo.xcprivacy` file declaring use of required re
 
 ### Accessibility Permission
 
-The app requests Accessibility permission to capture window titles. This is optional.
+The app requests Accessibility permission to capture window titles. This is optional but recommended.
 
 **Usage description (Info.plist):**
 ```xml
@@ -108,12 +108,19 @@ The app requests Accessibility permission to capture window titles. This is opti
 <string>WellWhaddyaKnow uses Accessibility to capture window titles for more detailed time tracking. Without this permission, only application names are recorded.</string>
 ```
 
+> ⚠️ **Dual-permission requirement**: Accessibility must be granted to **both** the GUI app
+> (`WellWhaddyaKnow.app`) and the agent binary (`wwkd` inside `.app/Contents/MacOS/`).
+> The agent is the process that actually captures window titles. Adding `wwkd` to the
+> Accessibility list may produce **no visible change** in System Settings — this is normal
+> macOS TCC behavior. The permission is recorded internally regardless.
+
 ### Behavior When Denied
 
 - App continues to function normally
 - Only application names are recorded
 - Window titles show as "unavailable"
-- User can grant permission later via System Settings
+- User can grant permission later via System Settings → Privacy & Security → Accessibility
+- The **Agent** tab in Preferences shows per-process Accessibility status (GUI app vs agent)
 
 ## Background Agent Registration
 
