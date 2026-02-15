@@ -41,7 +41,7 @@ struct PreferencesWindow: View {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(minWidth: 560, minHeight: 520)
+        .frame(minWidth: 480, minHeight: 400)
         .task {
             await viewModel.refreshStatus()
         }

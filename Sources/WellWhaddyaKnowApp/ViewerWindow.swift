@@ -453,12 +453,15 @@ final class ViewerViewModel: ObservableObject {
         }
         reportSegments = segments
 
-        // By app (with inactive time)
+        // Unobserved gap time (common to all groupings)
+        let unobservedSeconds = Aggregations.totalUnobservedGaps(segments: segments)
+
+        // By app (with inactive + unobserved time)
         let byApp = Aggregations.totalsByAppName(segments: segments)
         let totalActiveSeconds = byApp.values.reduce(0.0, +)
         let effectiveEnd = min(reportEndTime, Date())
         let rangeDurationSeconds = max(0, effectiveEnd.timeIntervalSince(reportStartTime))
-        let inactiveSeconds = max(0, rangeDurationSeconds - totalActiveSeconds)
+        let inactiveSeconds = max(0, rangeDurationSeconds - totalActiveSeconds - unobservedSeconds)
 
         var appRows = byApp
             .map { ReportRow(appName: $0.key, windowTitle: nil, tagName: nil,
@@ -466,6 +469,16 @@ final class ViewerViewModel: ObservableObject {
                              percentage: rangeDurationSeconds > 0 ? $0.value / rangeDurationSeconds * 100 : 0) }
             .sorted { $0.totalSeconds > $1.totalSeconds }
 
+        if unobservedSeconds > 0 {
+            appRows.append(ReportRow(
+                appName: "(unobserved)",
+                windowTitle: nil,
+                tagName: nil,
+                totalSeconds: unobservedSeconds,
+                percentage: rangeDurationSeconds > 0 ? unobservedSeconds / rangeDurationSeconds * 100 : 0,
+                isUnobserved: true
+            ))
+        }
         if inactiveSeconds > 0 {
             appRows.append(ReportRow(
                 appName: "Inactive",
@@ -477,22 +490,44 @@ final class ViewerViewModel: ObservableObject {
         }
         reportByApp = appRows
 
-        // By app + window
+        // By app + window (with unobserved time)
         let byAppWin = Aggregations.totalsByAppNameAndWindow(segments: segments)
-        let totalAW = byAppWin.reduce(0.0) { $0 + $1.seconds }
-        reportByAppWindow = byAppWin
+        let totalAW = byAppWin.reduce(0.0) { $0 + $1.seconds } + unobservedSeconds
+        var appWinRows = byAppWin
             .map { ReportRow(appName: $0.appName, windowTitle: $0.windowTitle, tagName: nil,
                              totalSeconds: $0.seconds,
                              percentage: totalAW > 0 ? $0.seconds / totalAW * 100 : 0) }
+        if unobservedSeconds > 0 {
+            appWinRows.append(ReportRow(
+                appName: "(unobserved)",
+                windowTitle: "(no data)",
+                tagName: nil,
+                totalSeconds: unobservedSeconds,
+                percentage: totalAW > 0 ? unobservedSeconds / totalAW * 100 : 0,
+                isUnobserved: true
+            ))
+        }
+        reportByAppWindow = appWinRows
 
-        // By tag
+        // By tag (with unobserved time)
         let byTag = Aggregations.totalsByTag(segments: segments)
-        let totalTag = byTag.values.reduce(0.0, +)
-        reportByTag = byTag
+        let totalTag = byTag.values.reduce(0.0, +) + unobservedSeconds
+        var tagRows = byTag
             .map { ReportRow(appName: "", windowTitle: nil, tagName: $0.key,
                              totalSeconds: $0.value,
                              percentage: totalTag > 0 ? $0.value / totalTag * 100 : 0) }
             .sorted { $0.totalSeconds > $1.totalSeconds }
+        if unobservedSeconds > 0 {
+            tagRows.append(ReportRow(
+                appName: "",
+                windowTitle: nil,
+                tagName: "(unobserved)",
+                totalSeconds: unobservedSeconds,
+                percentage: totalTag > 0 ? unobservedSeconds / totalTag * 100 : 0,
+                isUnobserved: true
+            ))
+        }
+        reportByTag = tagRows
     }
 
     /// Apply tag to all report segments matching a category label and optional hour
@@ -629,6 +664,17 @@ struct ReportRow: Identifiable {
     let tagName: String?
     let totalSeconds: Double
     let percentage: Double
+    let isUnobserved: Bool
+
+    init(appName: String, windowTitle: String?, tagName: String?,
+         totalSeconds: Double, percentage: Double, isUnobserved: Bool = false) {
+        self.appName = appName
+        self.windowTitle = windowTitle
+        self.tagName = tagName
+        self.totalSeconds = totalSeconds
+        self.percentage = percentage
+        self.isUnobserved = isUnobserved
+    }
 
     var formattedDuration: String {
         let h = Int(totalSeconds) / 3600
@@ -1461,6 +1507,13 @@ enum ExportFormatOption: String, CaseIterable, Identifiable {
 
 // MARK: - Reports Tab
 
+enum ReportDisplayMode: String, CaseIterable, Identifiable {
+    case raw = "Raw"
+    case proportional = "% of Total"
+
+    var id: String { rawValue }
+}
+
 enum ReportGrouping: String, CaseIterable, Identifiable {
     case byApp = "By Application"
     case byAppWindow = "By App + Window"
@@ -1491,6 +1544,7 @@ struct ReportsTabView: View {
     @ObservedObject var viewModel: ViewerViewModel
     @State private var selectedGrouping: ReportGrouping = .byApp
     @State private var visualizationMode: ReportVisualizationMode = .table
+    @State private var displayMode: ReportDisplayMode = .raw
     @State private var tagOperationMessage: String? = nil
     @State private var showingTagAlert: Bool = false
 
@@ -1530,7 +1584,7 @@ struct ReportsTabView: View {
 
             Divider()
 
-            // Grouping + Visualization mode pickers
+            // Grouping + Visualization + Display mode pickers
             HStack(spacing: 12) {
                 Picker("Group by", selection: $selectedGrouping) {
                     ForEach(ReportGrouping.allCases) { g in
@@ -1549,6 +1603,17 @@ struct ReportsTabView: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(maxWidth: 280)
+
+                Divider()
+                    .frame(height: 20)
+
+                Picker("Display", selection: $displayMode) {
+                    ForEach(ReportDisplayMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 160)
             }
             .padding(.horizontal)
             .padding(.vertical, 6)
@@ -1601,13 +1666,13 @@ struct ReportsTabView: View {
                 } else {
                     switch visualizationMode {
                     case .table:
-                        ReportsChartView(data: data, grouping: selectedGrouping)
-                            .frame(minHeight: 280, idealHeight: 320)
+                        ReportsChartView(data: data, grouping: selectedGrouping, displayMode: displayMode)
+                            .frame(minHeight: 280, idealHeight: 320, maxHeight: .infinity)
                             .padding()
 
                         Divider()
 
-                        ReportsTableView(data: data, grouping: selectedGrouping)
+                        ReportsTableView(data: data, grouping: selectedGrouping, displayMode: displayMode)
 
                     case .hourlyBar:
                         HourlyBarChartView(
@@ -1786,11 +1851,19 @@ struct ReportsTabView: View {
 struct ReportsChartView: View {
     let data: [ReportRow]
     let grouping: ReportGrouping
+    var displayMode: ReportDisplayMode = .raw
     @State private var hoveredLabel: String?
 
-    /// Max hours across visible rows — used to decide whether a bar is wide enough for annotation
-    private var maxHours: Double {
-        data.prefix(15).map { $0.totalSeconds / 3600.0 }.max() ?? 1.0
+    private var isProportional: Bool { displayMode == .proportional }
+
+    /// Max value across visible rows — used to decide whether a bar is wide enough for annotation
+    private var maxValue: Double {
+        let rows = data.prefix(15)
+        if isProportional {
+            return rows.map { $0.percentage }.max() ?? 1.0
+        } else {
+            return rows.map { $0.totalSeconds / 3600.0 }.max() ?? 1.0
+        }
     }
 
     var body: some View {
@@ -1798,17 +1871,19 @@ struct ReportsChartView: View {
             Chart {
                 ForEach(Array(data.prefix(15))) { row in
                     let label = chartLabel(for: row)
-                    let hours = row.totalSeconds / 3600.0
+                    let value = isProportional ? row.percentage : row.totalSeconds / 3600.0
+                    let baseOpacity: Double = row.isUnobserved ? 0.45 : 1.0
                     BarMark(
-                        x: .value("Hours", hours),
+                        x: .value(isProportional ? "%" : "Hours", value),
                         y: .value("Label", label)
                     )
                     .foregroundStyle(by: .value("Category", chartColor(for: row)))
-                    .opacity(hoveredLabel == nil || hoveredLabel == label ? 1.0 : 0.4)
+                    .opacity((hoveredLabel == nil || hoveredLabel == label ? baseOpacity : 0.4 * baseOpacity))
                     .annotation(position: .trailing, spacing: 4) {
-                        // Only show hours label when bar is ≥10% of the widest bar
-                        if hours / maxHours >= 0.10 {
-                            Text(String(format: "%.2fh", hours))
+                        if value / maxValue >= 0.10 {
+                            Text(isProportional
+                                 ? String(format: "%.1f%%", value)
+                                 : String(format: "%.2fh", value))
                                 .font(.system(.caption2, design: .monospaced))
                                 .foregroundColor(.secondary)
                         }
@@ -1822,7 +1897,7 @@ struct ReportsChartView: View {
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
                 }
             }
-            .chartXAxisLabel("Hours")
+            .chartXAxisLabel(isProportional ? "% of Total" : "Hours")
             .chartXAxis {
                 AxisMarks(position: .bottom)
             }
@@ -1896,7 +1971,7 @@ struct ReportsChartView: View {
     }
 
     private func colorForCategory(_ category: String, in categories: [String]) -> Color {
-        if category == "Inactive" { return .gray }
+        if category == "Inactive" || category == "(unobserved)" { return .gray }
         let palette: [Color] = [.blue, .green, .orange, .purple, .red, .cyan, .yellow, .pink, .mint, .indigo, .brown, .teal]
         guard let idx = categories.firstIndex(of: category) else { return .gray }
         return palette[idx % palette.count]
@@ -1918,31 +1993,43 @@ struct ReportsChartView: View {
 struct ReportsTableView: View {
     let data: [ReportRow]
     let grouping: ReportGrouping
+    var displayMode: ReportDisplayMode = .raw
+
+    private var isProportional: Bool { displayMode == .proportional }
 
     var body: some View {
         Table(data) {
             TableColumn("Name") { row in
                 Text(tableName(for: row))
+                    .italic(row.isUnobserved)
+                    .foregroundColor(row.isUnobserved ? .secondary : .primary)
             }
             .width(min: 120)
 
             TableColumn("Detail") { row in
                 Text(tableDetail(for: row))
                     .foregroundColor(tableDetailColor(for: row))
+                    .italic(row.isUnobserved)
             }
             .width(min: 160)
 
-            TableColumn("Duration") { row in
-                Text(row.formattedDuration)
+            TableColumn(isProportional ? "% of Total" : "Duration") { row in
+                Text(isProportional
+                     ? String(format: "%.1f%%", row.percentage)
+                     : row.formattedDuration)
                     .font(.system(.body, design: .monospaced))
+                    .foregroundColor(row.isUnobserved ? .secondary : .primary)
             }
             .width(min: 80, ideal: 100)
 
-            TableColumn("%") { row in
-                Text(String(format: "%.1f%%", row.percentage))
+            TableColumn(isProportional ? "Duration" : "%") { row in
+                Text(isProportional
+                     ? row.formattedDuration
+                     : String(format: "%.1f%%", row.percentage))
                     .font(.system(.body, design: .monospaced))
+                    .foregroundColor(row.isUnobserved ? .secondary : .primary)
             }
-            .width(min: 50, ideal: 70)
+            .width(min: 80, ideal: 100)
         }
     }
 
@@ -2143,6 +2230,24 @@ struct TimelineGanttView: View {
     let grouping: ReportGrouping
     let rangeStart: Date
     let rangeEnd: Date
+    @State private var hoveredPoint: GanttDataPoint?
+
+    private static let tooltipTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        f.timeZone = DisplayTimezoneHelper.preferred
+        return f
+    }()
+
+    private func formatDuration(_ seconds: Foundation.TimeInterval) -> String {
+        let total = Int(max(0, seconds))
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        if h > 0 { return "\(h)h \(m)m" }
+        if m > 0 { return "\(m)m \(s)s" }
+        return "\(s)s"
+    }
 
     private var dataPoints: [GanttDataPoint] {
         segments.compactMap { seg -> GanttDataPoint? in
@@ -2218,6 +2323,51 @@ struct TimelineGanttView: View {
                     AxisMarks(position: .leading)
                 }
                 .chartXScale(domain: rangeStart...min(rangeEnd, Date()))
+                .chartOverlay { proxy in
+                    GeometryReader { _ in
+                        Rectangle()
+                            .fill(.clear)
+                            .contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                switch phase {
+                                case .active(let location):
+                                    guard let hoveredDate: Date = proxy.value(atX: location.x),
+                                          let hoveredLabel: String = proxy.value(atY: location.y) else {
+                                        hoveredPoint = nil
+                                        return
+                                    }
+                                    // Find the data point at this label whose time range contains the hovered date
+                                    hoveredPoint = points.first { dp in
+                                        dp.label == hoveredLabel &&
+                                        dp.startDate <= hoveredDate &&
+                                        dp.endDate >= hoveredDate
+                                    }
+                                case .ended:
+                                    hoveredPoint = nil
+                                }
+                            }
+                    }
+                }
+                .overlay(alignment: .topTrailing) {
+                    if let hp = hoveredPoint {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(hp.label)
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .lineLimit(1)
+                            Text(formatDuration(hp.endDate.timeIntervalSince(hp.startDate)))
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Text("\(Self.tooltipTimeFormatter.string(from: hp.startDate)) – \(Self.tooltipTimeFormatter.string(from: hp.endDate))")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(6)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
+                        .padding(8)
+                        .transition(.opacity)
+                    }
+                }
                 .frame(minHeight: max(200, CGFloat(sortedLabels.count) * 32))
             }
         }

@@ -278,6 +278,7 @@ final class WindowManager {
         window.title = "WellWhaddyaKnow Viewer"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.setContentSize(NSSize(width: 900, height: 600))
+        window.minSize = NSSize(width: 800, height: 500)
         window.center()
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
@@ -299,7 +300,7 @@ final class WindowManager {
         window.title = "Preferences"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.setContentSize(NSSize(width: 560, height: 520))
-        window.minSize = NSSize(width: 560, height: 520)
+        window.minSize = NSSize(width: 480, height: 400)
         window.center()
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
