@@ -4,8 +4,8 @@
 class Wwk < Formula
   desc "macOS time tracker — CLI, background agent, and menu bar app"
   homepage "https://github.com/Daylily-Informatics/well-whaddya-know"
-  url "https://github.com/Daylily-Informatics/well-whaddya-know/archive/refs/tags/0.9.0.tar.gz"
-  sha256 "ffeb858ee28991b5be05f255e50c5b36960a25c9ff7345318cda46fdcddb47a9"
+  url "https://github.com/Daylily-Informatics/well-whaddya-know/archive/refs/tags/0.10.0.tar.gz"
+  sha256 "23f0314a4ba503f8cb715e55b2f17ff02a4af4aaf9b4037fbd55706d96708b47"
   license "MIT"
   head "https://github.com/Daylily-Informatics/well-whaddya-know.git", branch: "main"
 
@@ -23,29 +23,40 @@ class Wwk < Formula
       }
     SWIFT
 
-    # Build all products (wwk, wwkd, WellWhaddyaKnow)
-    system "swift", "build",
-           "--configuration", "release",
-           "--disable-sandbox",
-           "-Xswiftc", "-cross-module-optimization"
-
-    # Install CLI and agent binaries
-    bin.install ".build/release/wwk"
-    bin.install ".build/release/wwkd"
-
-    # Construct WellWhaddyaKnow.app bundle
+    # Construct paths for the app bundle up front so the shell
+    # script can install binaries directly to their final locations.
     app_bundle = prefix/"WellWhaddyaKnow.app"
     contents   = app_bundle/"Contents"
     macos_dir  = contents/"MacOS"
     resources  = contents/"Resources"
     la_dir     = contents/"Library/LaunchAgents"
 
+    bin.mkpath
     macos_dir.mkpath
     resources.mkpath
     la_dir.mkpath
 
-    cp ".build/release/WellWhaddyaKnow", macos_dir/"WellWhaddyaKnow"
-    cp ".build/release/wwkd",            macos_dir/"wwkd"
+    # Swift 6 new build system may remove previous binaries when
+    # building a different --product.  Build each product and install
+    # immediately within a single shell invocation.
+    system "sh", "-c", <<~SH
+      set -e
+      FLAGS="--configuration release --disable-sandbox -Xswiftc -cross-module-optimization"
+
+      swift build $FLAGS --product wwk
+      BP=$(swift build --show-bin-path --configuration release)
+      install -m 755 "$BP/wwk" "#{bin}/"
+
+      swift build $FLAGS --product wwkd
+      install -m 755 "$BP/wwkd" "#{bin}/"
+      install -m 755 "$BP/wwkd" "#{macos_dir}/"
+
+      swift build $FLAGS --product WellWhaddyaKnow
+      install -m 755 "$BP/WellWhaddyaKnow" "#{macos_dir}/"
+
+      echo "--- installed ---"
+      ls -la "#{bin}/wwk" "#{bin}/wwkd" "#{macos_dir}/WellWhaddyaKnow" "#{macos_dir}/wwkd"
+    SH
 
     # Embed launchd plist (required for SMAppService)
     cp "Sources/WellWhaddyaKnowApp/LaunchAgents/com.daylily.wellwhaddyaknow.agent.plist",
