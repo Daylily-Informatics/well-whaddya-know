@@ -349,7 +349,7 @@ final class ViewerDatabaseReader {
             FROM user_edit_events u
             LEFT JOIN tags t ON u.tag_id = t.tag_id
             WHERE u.op = 'undo_edit'
-            ORDER BY created_ts_us;
+            ORDER BY 2;
             """
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }
