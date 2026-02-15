@@ -322,8 +322,8 @@ final class WindowManager {
         let window = NSWindow(contentViewController: hostingController)
         window.title = "WellWhaddyaKnow Viewer"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.setContentSize(NSSize(width: 900, height: 600))
-        window.minSize = NSSize(width: 800, height: 500)
+        window.setContentSize(NSSize(width: 1120, height: 720))
+        window.minSize = NSSize(width: 900, height: 600)
         window.center()
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
@@ -342,10 +342,16 @@ final class WindowManager {
         let hostingController = NSHostingController(rootView: preferencesView)
         hostingController.sizingOptions = []
 
+        // Size to 50% of the main screen
+        let screen = NSScreen.main ?? NSScreen.screens.first
+        let screenFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1120, height: 1040)
+        let prefWidth = max(560, screenFrame.width * 0.5)
+        let prefHeight = max(520, screenFrame.height * 0.5)
+
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Preferences"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.setContentSize(NSSize(width: 560, height: 520))
+        window.setContentSize(NSSize(width: prefWidth, height: prefHeight))
         window.minSize = NSSize(width: 480, height: 400)
         window.center()
         NSApp.activate(ignoringOtherApps: true)

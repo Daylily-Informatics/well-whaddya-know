@@ -14,9 +14,10 @@ struct TagData {
     let isRetired: Bool
 }
 
-/// Read-only database access for Viewer window
-@MainActor
-final class ViewerDatabaseReader {
+/// Read-only database access for Viewer window.
+/// NOT isolated to MainActor — all heavy DB I/O and timeline building
+/// runs on the cooperative thread pool so the UI stays responsive.
+final class ViewerDatabaseReader: Sendable {
     
     /// App Group identifier for shared container
     private static let appGroupId = "group.com.daylily.wellwhaddyaknow"
