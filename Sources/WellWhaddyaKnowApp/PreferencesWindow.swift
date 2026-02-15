@@ -21,9 +21,9 @@ struct PreferencesWindow: View {
                     Label("General", systemImage: "gear")
                 }
 
-            PermissionsPreferencesView(viewModel: viewModel)
+            AgentPreferencesView(viewModel: viewModel)
                 .tabItem {
-                    Label("Permissions", systemImage: "lock.shield")
+                    Label("Agent", systemImage: "gearshape.2")
                 }
 
             DiagnosticsPreferencesView(viewModel: viewModel)
@@ -907,20 +907,21 @@ struct GeneralPreferencesView: View {
     }
 }
 
-// MARK: - Permissions Preferences
+// MARK: - Agent Preferences (consolidated)
 
-struct PermissionsPreferencesView: View {
+struct AgentPreferencesView: View {
     @ObservedObject var viewModel: PreferencesViewModel
+    @State private var showManualSteps: Bool = false
 
     var body: some View {
-        Form {
-            Section("Accessibility Permission") {
-                // --- GUI app status ---
-                VStack(alignment: .leading, spacing: 4) {
+        ScrollView {
+            Form {
+                // ── Agent Status ──
+                Section("Agent Status") {
                     HStack {
-                        Image(systemName: viewModel.accessibilityGranted ? "checkmark.circle.fill" : "xmark.circle.fill")
-                            .foregroundColor(viewModel.accessibilityGranted ? .green : .red)
-                        Text(viewModel.accessibilityGranted ? "GUI app — permission granted ✓" : "GUI app — permission NOT granted")
+                        Image(systemName: viewModel.agentRunning ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundColor(viewModel.agentRunning ? .green : .orange)
+                        Text(viewModel.agentStatusMessage)
                             .fontWeight(.medium)
                         Spacer()
                         if viewModel.isRefreshing {
@@ -928,224 +929,190 @@ struct PermissionsPreferencesView: View {
                                 .controlSize(.small)
                         }
                     }
-                    HStack(spacing: 4) {
-                        Text(viewModel.appBundlePath)
-                            .font(.system(.caption2, design: .monospaced))
-                            .textSelection(.enabled)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Button {
-                            viewModel.copyToClipboard(viewModel.appBundlePath)
-                        } label: {
-                            Image(systemName: "doc.on.doc")
+
+                    if viewModel.agentRunning {
+                        LabeledContent("PID:") {
+                            Text(viewModel.agentPID.map { String($0) } ?? "N/A")
+                                .font(.system(.caption, design: .monospaced))
                         }
-                        .buttonStyle(.borderless)
-                        .font(.caption2)
-                        .help("Copy path")
+                        LabeledContent("Version:") { Text(viewModel.agentVersion).font(.caption) }
+                    }
+
+                    if viewModel.isManagedByCLI {
+                        agentDiagRow("Managed by", ok: true, detail: "CLI plist (wwk agent install)")
+                    } else if viewModel.isPlistMissing {
+                        agentDiagRow("Registered", ok: nil, detail: "N/A — dev build")
+                    } else {
+                        agentDiagRow("Registered", ok: viewModel.agentRegistered, detail: viewModel.registrationStatusText)
+                        agentDiagRow("Enabled", ok: viewModel.agentEnabled,
+                                     detail: viewModel.requiresApproval ? "Requires approval in System Settings" : nil)
+                    }
+
+                    Text("The background agent (wwkd) must be running to track time.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                // ── Agent Controls ──
+                Section("Controls") {
+                    HStack(spacing: 8) {
+                        Button("Start") { viewModel.startAgent() }
+                            .disabled(viewModel.agentRunning)
+                        Button("Stop") { viewModel.stopAgent() }
+                            .disabled(!viewModel.agentRunning)
+                        Button("Restart") { viewModel.restartAgent() }
+                            .disabled(!viewModel.agentRunning)
+                    }
+
+                    HStack(spacing: 8) {
+                        Button(viewModel.agentRegistered ? "Unregister" : "Register") {
+                            if viewModel.agentRegistered {
+                                viewModel.unregisterAgent()
+                            } else {
+                                viewModel.registerAgent()
+                            }
+                        }
+                        Button("Login Items Settings") { viewModel.openLoginItemsSettings() }
+                    }
+
+                    HStack(spacing: 8) {
+                        Button {
+                            viewModel.openAgentLogs()
+                        } label: {
+                            Label("View Logs", systemImage: "doc.text.magnifyingglass")
+                        }
+                        Button {
+                            Task { await viewModel.refreshStatus() }
+                        } label: {
+                            Label("Refresh", systemImage: "arrow.clockwise")
+                        }
                     }
                 }
 
-                // --- Agent status ---
-                VStack(alignment: .leading, spacing: 4) {
+                // ── Accessibility Permissions ──
+                Section("Accessibility Permission") {
+                    // GUI app
+                    HStack {
+                        Image(systemName: viewModel.accessibilityGranted ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundColor(viewModel.accessibilityGranted ? .green : .red)
+                            .font(.caption)
+                        Text("GUI app")
+                            .font(.caption)
+                        Spacer()
+                        Text(viewModel.accessibilityGranted ? "Granted" : "Denied")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+
+                    // Agent
                     HStack {
                         Image(systemName: (viewModel.agentRunning && viewModel.agentAccessibilityGranted)
-                              ? "checkmark.circle.fill"
-                              : "xmark.circle.fill")
+                              ? "checkmark.circle.fill" : "xmark.circle.fill")
                             .foregroundColor((viewModel.agentRunning && viewModel.agentAccessibilityGranted)
-                                             ? .green
-                                             : (viewModel.agentRunning ? .orange : .secondary))
+                                             ? .green : (viewModel.agentRunning ? .orange : .secondary))
+                            .font(.caption)
+                        Text("Agent (wwkd)")
+                            .font(.caption)
+                        Spacer()
                         Text(viewModel.agentRunning
-                             ? (viewModel.agentAccessibilityGranted
-                                ? "Agent (wwkd) — permission granted ✓"
-                                : "Agent (wwkd) — permission NOT granted")
-                             : "Agent (wwkd) — not running")
-                            .fontWeight(.medium)
-                    }
-                    HStack(spacing: 4) {
-                        Text(viewModel.agentBinaryPath)
-                            .font(.system(.caption2, design: .monospaced))
-                            .textSelection(.enabled)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        if viewModel.agentBinaryPath != "(not found)" {
-                            Button {
-                                viewModel.copyToClipboard(viewModel.agentBinaryPath)
-                            } label: {
-                                Image(systemName: "doc.on.doc")
-                            }
-                            .buttonStyle(.borderless)
+                             ? (viewModel.agentAccessibilityGranted ? "Granted" : "Denied")
+                             : "Not running")
                             .font(.caption2)
-                            .help("Copy path")
+                            .foregroundColor(.secondary)
+                    }
+
+                    if !viewModel.accessibilityGranted || (viewModel.agentRunning && !viewModel.agentAccessibilityGranted) {
+                        Text("Window title capture requires Accessibility permission for BOTH the GUI app and the agent.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    HStack(spacing: 8) {
+                        Button("Request Permission") {
+                            viewModel.requestAccessibilityPermission()
                         }
-                    }
-                }
+                        .disabled(viewModel.accessibilityGranted)
 
-                if !viewModel.accessibilityGranted || (viewModel.agentRunning && !viewModel.agentAccessibilityGranted) {
-                    Text("Window title capture requires Accessibility permission for BOTH the GUI app and the agent (wwkd). Click \"Request Permission\" first. If that doesn't work, use \"Open System Settings\" and follow the steps below.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                HStack(spacing: 8) {
-                    Button("Request Permission") {
-                        viewModel.requestAccessibilityPermission()
-                    }
-                    .disabled(viewModel.accessibilityGranted)
-
-                    Button {
-                        Task { await viewModel.refreshStatus() }
-                    } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise")
-                    }
-                }
-            }
-
-            Section("How to Grant Accessibility (Manual Steps)") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("If \"Request Permission\" didn't show a prompt, add these items manually:")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
-                    // Step 1
-                    HStack(alignment: .top, spacing: 6) {
-                        Text("1.")
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .frame(width: 18, alignment: .trailing)
-                        Text("Click \"Open System Settings\" below. It opens Privacy & Security → Accessibility.")
-                            .font(.caption)
-                    }
-
-                    // Step 2
-                    HStack(alignment: .top, spacing: 6) {
-                        Text("2.")
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .frame(width: 18, alignment: .trailing)
-                        Text("Click the 🔒 lock icon (bottom-left), then click the \"+\" button.")
-                            .font(.caption)
-                    }
-
-                    // Step 3 — GUI app
-                    HStack(alignment: .top, spacing: 6) {
-                        Text("3.")
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .frame(width: 18, alignment: .trailing)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Add the **GUI app**:")
-                                .font(.caption)
-                            Text(viewModel.appBundlePath)
-                                .font(.system(.caption2, design: .monospaced))
-                                .textSelection(.enabled)
-                                .lineLimit(2)
-                                .truncationMode(.middle)
-                            HStack(spacing: 6) {
-                                Button {
-                                    viewModel.copyToClipboard(viewModel.appBundlePath)
-                                } label: {
-                                    Label("Copy", systemImage: "doc.on.doc")
-                                }
-                                .font(.caption2)
-                                Button {
-                                    viewModel.revealAppInFinder()
-                                } label: {
-                                    Label("Reveal", systemImage: "folder")
-                                }
-                                .font(.caption2)
-                            }
+                        Button("Open System Settings") {
+                            viewModel.openAccessibilitySettings()
                         }
                     }
 
-                    // Step 4 — Agent binary
-                    HStack(alignment: .top, spacing: 6) {
-                        Text("4.")
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .frame(width: 18, alignment: .trailing)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Add the **agent binary** (wwkd):")
-                                .font(.caption)
-                            Text(viewModel.agentBinaryPath)
-                                .font(.system(.caption2, design: .monospaced))
-                                .textSelection(.enabled)
-                                .lineLimit(2)
-                                .truncationMode(.middle)
+                    DisclosureGroup("Manual Steps", isExpanded: $showManualSteps) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            manualStep(1, "Open System Settings → Privacy & Security → Accessibility.")
+                            manualStep(2, "Click the 🔒 lock icon, then click \"+\".")
+                            manualStepWithPath(3, "Add the GUI app:", viewModel.appBundlePath,
+                                               onCopy: { viewModel.copyToClipboard(viewModel.appBundlePath) },
+                                               onReveal: { viewModel.revealAppInFinder() })
                             if viewModel.agentBinaryPath != "(not found)" {
-                                HStack(spacing: 6) {
-                                    Button {
-                                        viewModel.copyToClipboard(viewModel.agentBinaryPath)
-                                    } label: {
-                                        Label("Copy", systemImage: "doc.on.doc")
-                                    }
-                                    .font(.caption2)
-                                    Button {
-                                        viewModel.revealAgentInFinder()
-                                    } label: {
-                                        Label("Reveal", systemImage: "folder")
-                                    }
-                                    .font(.caption2)
-                                }
+                                manualStepWithPath(4, "Add the agent binary (wwkd):", viewModel.agentBinaryPath,
+                                                   onCopy: { viewModel.copyToClipboard(viewModel.agentBinaryPath) },
+                                                   onReveal: { viewModel.revealAgentInFinder() })
                             }
+                            manualStep(5, "Toggle BOTH items ON, then click Refresh above.")
                         }
                     }
-
-                    // Step 5
-                    HStack(alignment: .top, spacing: 6) {
-                        Text("5.")
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .frame(width: 18, alignment: .trailing)
-                        Text("Toggle BOTH items ON, then come back and click Refresh.")
-                            .font(.caption)
-                    }
-                }
-
-                Button("Open System Settings") {
-                    viewModel.openAccessibilitySettings()
+                    .font(.caption)
                 }
             }
+            .formStyle(.grouped)
+        }
+        .padding(.horizontal)
+    }
 
-            Section("Background Agent") {
-                HStack {
-                    Image(systemName: viewModel.agentRunning ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .foregroundColor(viewModel.agentRunning ? .green : .orange)
-                    Text(viewModel.agentStatusMessage)
-                        .fontWeight(.medium)
-                }
+    // MARK: - Helpers
 
-                Text("The background agent (wwkd) must be running to track time.")
+    private func agentDiagRow(_ label: String, ok: Bool?, detail: String? = nil) -> some View {
+        HStack {
+            if let ok = ok {
+                Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    .foregroundColor(ok ? .green : .red)
                     .font(.caption)
+            } else {
+                Image(systemName: "minus.circle.fill")
                     .foregroundColor(.secondary)
+                    .font(.caption)
+            }
+            Text(label).font(.caption)
+            if let detail = detail {
+                Spacer()
+                Text(detail).font(.caption2).foregroundColor(.secondary)
+            }
+        }
+    }
 
-                HStack(spacing: 8) {
-                    Button("Start") {
-                        viewModel.startAgent()
-                    }
-                    .disabled(viewModel.agentRunning)
+    private func manualStep(_ num: Int, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text("\(num).")
+                .fontWeight(.bold)
+                .frame(width: 18, alignment: .trailing)
+            Text(text)
+        }
+        .font(.caption)
+    }
 
-                    Button("Stop") {
-                        viewModel.stopAgent()
-                    }
-                    .disabled(!viewModel.agentRunning)
-
-                    Button("Restart") {
-                        viewModel.restartAgent()
-                    }
-                    .disabled(!viewModel.agentRunning)
-
-                    Spacer()
-
-                    Button {
-                        viewModel.openAgentLogs()
-                    } label: {
-                        Label("View Logs", systemImage: "doc.text.magnifyingglass")
-                    }
+    private func manualStepWithPath(_ num: Int, _ label: String, _ path: String,
+                                     onCopy: @escaping () -> Void,
+                                     onReveal: @escaping () -> Void) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text("\(num).")
+                .fontWeight(.bold)
+                .frame(width: 18, alignment: .trailing)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label).font(.caption)
+                Text(path)
+                    .font(.system(.caption2, design: .monospaced))
+                    .textSelection(.enabled)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                HStack(spacing: 6) {
+                    Button { onCopy() } label: { Label("Copy", systemImage: "doc.on.doc") }.font(.caption2)
+                    Button { onReveal() } label: { Label("Reveal", systemImage: "folder") }.font(.caption2)
                 }
             }
         }
-        .formStyle(.grouped)
-        .padding()
+        .font(.caption)
     }
 }
 
@@ -1158,32 +1125,6 @@ struct DiagnosticsPreferencesView: View {
     var body: some View {
         ScrollView {
             Form {
-                Section("Agent Status") {
-                    if viewModel.isManagedByCLI {
-                        // CLI plist owns the launchd label
-                        diagRow("Managed by", ok: true, detail: "CLI plist (wwk agent install)")
-                        Text("SMAppService registration deferred — CLI plist takes precedence.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else if viewModel.isPlistMissing {
-                        // Dev build: plist not in bundle, show neutral indicators
-                        diagRow("Registered", ok: nil, detail: "N/A — dev build (no LaunchAgent plist)")
-                        diagRow("Enabled", ok: nil, detail: "N/A — dev build")
-                    } else {
-                        diagRow("Registered", ok: viewModel.agentRegistered, detail: viewModel.registrationStatusText)
-                        diagRow("Enabled", ok: viewModel.agentEnabled,
-                                detail: viewModel.requiresApproval ? "Requires approval in System Settings" : nil)
-                    }
-                    diagRow("Running", ok: viewModel.agentRunning)
-                    LabeledContent("PID:") {
-                        Text(viewModel.agentPID.map { String($0) } ?? "N/A")
-                            .font(.system(.caption, design: .monospaced))
-                    }
-                    if viewModel.agentRunning {
-                        LabeledContent("Version:") { Text(viewModel.agentVersion).font(.caption) }
-                    }
-                }
-
                 Section("IPC Status") {
                     LabeledContent("Socket:") {
                         Text(viewModel.socketPath)
@@ -1218,25 +1159,7 @@ struct DiagnosticsPreferencesView: View {
                     diagRow("App Group container", ok: viewModel.appGroupAccessible)
                 }
 
-                Section("Actions") {
-                    HStack(spacing: 8) {
-                        Button(viewModel.agentRegistered ? "Unregister Agent" : "Register Agent") {
-                            if viewModel.agentRegistered {
-                                viewModel.unregisterAgent()
-                            } else {
-                                viewModel.registerAgent()
-                            }
-                        }
-
-                        Button("Login Items Settings") {
-                            viewModel.openLoginItemsSettings()
-                        }
-
-                        Button("Accessibility Settings") {
-                            viewModel.openAccessibilitySettings()
-                        }
-                    }
-
+                Section {
                     HStack(spacing: 8) {
                         Button {
                             Task { await viewModel.refreshStatus() }
