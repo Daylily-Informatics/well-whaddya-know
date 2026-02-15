@@ -41,7 +41,7 @@ struct PreferencesWindow: View {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(minWidth: 480, minHeight: 400)
+        .frame(minWidth: 480, maxWidth: .infinity, minHeight: 400, maxHeight: .infinity)
         .task {
             await viewModel.refreshStatus()
         }
@@ -286,6 +286,60 @@ final class PreferencesViewModel: ObservableObject {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    /// Path to the running .app bundle (what macOS tracks for GUI AX permission).
+    var appBundlePath: String {
+        Bundle.main.bundlePath
+    }
+
+    /// Best-guess path to the wwkd agent binary.
+    /// For Homebrew installs the layout is: PREFIX/WellWhaddyaKnow.app  +  PREFIX/bin/wwkd
+    /// For dev builds it falls back to the MacOS directory inside the bundle.
+    var agentBinaryPath: String {
+        let bundleURL = URL(fileURLWithPath: Bundle.main.bundlePath)
+        // Homebrew layout: PREFIX/WellWhaddyaKnow.app → PREFIX/bin/wwkd
+        let siblingBin = bundleURL.deletingLastPathComponent()
+            .appendingPathComponent("bin")
+            .appendingPathComponent("wwkd")
+        if FileManager.default.fileExists(atPath: siblingBin.path) {
+            return siblingBin.path
+        }
+        // Embedded in bundle: .app/Contents/MacOS/wwkd
+        let embeddedBin = bundleURL
+            .appendingPathComponent("Contents")
+            .appendingPathComponent("MacOS")
+            .appendingPathComponent("wwkd")
+        if FileManager.default.fileExists(atPath: embeddedBin.path) {
+            return embeddedBin.path
+        }
+        // Fallback: check PATH via `which`
+        let (code, out, _) = shell(["which", "wwkd"])
+        if code == 0, !out.isEmpty {
+            return out
+        }
+        return "(not found)"
+    }
+
+    func revealAppInFinder() {
+        NSWorkspace.shared.selectFile(
+            appBundlePath,
+            inFileViewerRootedAtPath: URL(fileURLWithPath: appBundlePath).deletingLastPathComponent().path
+        )
+    }
+
+    func revealAgentInFinder() {
+        let path = agentBinaryPath
+        guard path != "(not found)" else { return }
+        NSWorkspace.shared.selectFile(
+            path,
+            inFileViewerRootedAtPath: URL(fileURLWithPath: path).deletingLastPathComponent().path
+        )
+    }
+
+    func copyToClipboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     func requestAccessibilityPermission() {
@@ -683,6 +737,68 @@ struct PermissionsPreferencesView: View {
                         Task { await viewModel.refreshStatus() }
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                }
+            }
+
+            Section("App Paths for Accessibility") {
+                Text("Add these paths in System Settings → Privacy & Security → Accessibility.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                // GUI app path
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("GUI App (.app)")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                    Text(viewModel.appBundlePath)
+                        .font(.system(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                    HStack(spacing: 8) {
+                        Button {
+                            viewModel.revealAppInFinder()
+                        } label: {
+                            Label("Reveal in Finder", systemImage: "folder")
+                        }
+                        .font(.caption)
+                        Button {
+                            viewModel.copyToClipboard(viewModel.appBundlePath)
+                        } label: {
+                            Label("Copy Path", systemImage: "doc.on.doc")
+                        }
+                        .font(.caption)
+                    }
+                }
+
+                Divider()
+
+                // Agent binary path
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Agent Binary (wwkd)")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                    Text(viewModel.agentBinaryPath)
+                        .font(.system(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                    if viewModel.agentBinaryPath != "(not found)" {
+                        HStack(spacing: 8) {
+                            Button {
+                                viewModel.revealAgentInFinder()
+                            } label: {
+                                Label("Reveal in Finder", systemImage: "folder")
+                            }
+                            .font(.caption)
+                            Button {
+                                viewModel.copyToClipboard(viewModel.agentBinaryPath)
+                            } label: {
+                                Label("Copy Path", systemImage: "doc.on.doc")
+                            }
+                            .font(.caption)
+                        }
                     }
                 }
             }
