@@ -273,6 +273,7 @@ final class WindowManager {
 
         let viewerView = ViewerWindow()
         let hostingController = NSHostingController(rootView: viewerView)
+        hostingController.sizingOptions = []
 
         let window = NSWindow(contentViewController: hostingController)
         window.title = "WellWhaddyaKnow Viewer"
@@ -295,6 +296,7 @@ final class WindowManager {
 
         let preferencesView = PreferencesWindow()
         let hostingController = NSHostingController(rootView: preferencesView)
+        hostingController.sizingOptions = []
 
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Preferences"
