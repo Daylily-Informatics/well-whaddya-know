@@ -133,6 +133,27 @@ struct AccessibilityWarningView: View {
                 Text(warningText)
                     .font(.caption)
             }
+
+            Text("Add this app to System Settings → Privacy & Security → Accessibility:")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 4) {
+                Text(Bundle.main.bundlePath)
+                    .font(.system(.caption2, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(Bundle.main.bundlePath, forType: .string)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .buttonStyle(.borderless)
+                .font(.caption2)
+                .help("Copy path")
+            }
+
             Button("Open System Settings") {
                 onOpenSettings()
             }
@@ -216,8 +237,8 @@ struct ActionButtonsView: View {
     @ObservedObject var viewModel: StatusViewModel
 
     var body: some View {
-        VStack(spacing: 8) {
-            // Tracking toggle button
+        VStack(spacing: 10) {
+            // Primary action: tracking toggle (full width, prominent)
             Button {
                 Task {
                     await viewModel.toggleTracking()
@@ -231,24 +252,47 @@ struct ActionButtonsView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(viewModel.isWorking ? .orange : .green)
+            .controlSize(.large)
             .disabled(!viewModel.agentReachable)
 
+            // Navigation row: equal-width buttons
             HStack(spacing: 8) {
-                Button("Open Viewer") {
+                Button {
                     WindowManager.shared.openViewerWindow()
+                } label: {
+                    Label("Viewer", systemImage: "eye")
+                        .frame(maxWidth: .infinity)
                 }
-                Button("Export...") {
+                .buttonStyle(.bordered)
+
+                Button {
                     WindowManager.shared.openViewerWindow(tab: .exports)
+                } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                        .frame(maxWidth: .infinity)
                 }
-            }
-            HStack(spacing: 8) {
-                Button("Preferences...") {
+                .buttonStyle(.bordered)
+
+                Button {
                     WindowManager.shared.openPreferencesWindow()
+                } label: {
+                    Label("Settings", systemImage: "gearshape")
+                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.bordered)
+            }
+            .controlSize(.regular)
+
+            // Quit: right-aligned, subdued
+            HStack {
                 Spacer()
-                Button("Quit") {
+                Button(role: .destructive) {
                     viewModel.quitApp()
+                } label: {
+                    Label("Quit", systemImage: "power")
+                        .font(.caption)
                 }
+                .buttonStyle(.borderless)
             }
         }
     }

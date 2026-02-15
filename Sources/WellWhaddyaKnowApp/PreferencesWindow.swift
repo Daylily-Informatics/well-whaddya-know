@@ -41,7 +41,7 @@ struct PreferencesWindow: View {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(minWidth: 480, minHeight: 400)
+        .frame(minWidth: 480, maxWidth: .infinity, minHeight: 400, maxHeight: .infinity)
         .task {
             await viewModel.refreshStatus()
         }
@@ -288,6 +288,60 @@ final class PreferencesViewModel: ObservableObject {
         }
     }
 
+    /// Path to the running .app bundle (what macOS tracks for GUI AX permission).
+    var appBundlePath: String {
+        Bundle.main.bundlePath
+    }
+
+    /// Best-guess path to the wwkd agent binary.
+    /// For Homebrew installs the layout is: PREFIX/WellWhaddyaKnow.app  +  PREFIX/bin/wwkd
+    /// For dev builds it falls back to the MacOS directory inside the bundle.
+    var agentBinaryPath: String {
+        let bundleURL = URL(fileURLWithPath: Bundle.main.bundlePath)
+        // Homebrew layout: PREFIX/WellWhaddyaKnow.app → PREFIX/bin/wwkd
+        let siblingBin = bundleURL.deletingLastPathComponent()
+            .appendingPathComponent("bin")
+            .appendingPathComponent("wwkd")
+        if FileManager.default.fileExists(atPath: siblingBin.path) {
+            return siblingBin.path
+        }
+        // Embedded in bundle: .app/Contents/MacOS/wwkd
+        let embeddedBin = bundleURL
+            .appendingPathComponent("Contents")
+            .appendingPathComponent("MacOS")
+            .appendingPathComponent("wwkd")
+        if FileManager.default.fileExists(atPath: embeddedBin.path) {
+            return embeddedBin.path
+        }
+        // Fallback: check PATH via `which`
+        let (code, out, _) = shell(["which", "wwkd"])
+        if code == 0, !out.isEmpty {
+            return out
+        }
+        return "(not found)"
+    }
+
+    func revealAppInFinder() {
+        NSWorkspace.shared.selectFile(
+            appBundlePath,
+            inFileViewerRootedAtPath: URL(fileURLWithPath: appBundlePath).deletingLastPathComponent().path
+        )
+    }
+
+    func revealAgentInFinder() {
+        let path = agentBinaryPath
+        guard path != "(not found)" else { return }
+        NSWorkspace.shared.selectFile(
+            path,
+            inFileViewerRootedAtPath: URL(fileURLWithPath: path).deletingLastPathComponent().path
+        )
+    }
+
+    func copyToClipboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
     func requestAccessibilityPermission() {
         // Trigger the system prompt via AXIsProcessTrustedWithOptions
         let promptKey = "AXTrustedCheckOptionPrompt" as CFString
@@ -296,11 +350,159 @@ final class PreferencesViewModel: ObservableObject {
         accessibilityGranted = granted
     }
 
+    // MARK: - launchd Helpers
+
+    /// Check whether the launchd service is currently loaded (bootstrapped).
+    private nonisolated func isServiceLoaded() -> Bool {
+        let (code, _, _) = shell(["launchctl", "list", launchdLabel])
+        return code == 0
+    }
+
+    /// Locate the wwkd binary: sibling to running app → Homebrew paths → PATH
+    private nonisolated func findWwkdBinary() -> String? {
+        let bundlePath = Bundle.main.bundlePath
+        let bundleURL = URL(fileURLWithPath: bundlePath)
+        // Dev build: .build/release/WellWhaddyaKnow.app → .build/release/wwkd
+        let siblingDev = bundleURL.deletingLastPathComponent()
+            .appendingPathComponent("wwkd")
+        if FileManager.default.isExecutableFile(atPath: siblingDev.path) {
+            return siblingDev.path
+        }
+        // Homebrew layout: PREFIX/WellWhaddyaKnow.app → PREFIX/bin/wwkd
+        let siblingBin = bundleURL.deletingLastPathComponent()
+            .appendingPathComponent("bin")
+            .appendingPathComponent("wwkd")
+        if FileManager.default.isExecutableFile(atPath: siblingBin.path) {
+            return siblingBin.path
+        }
+        // Embedded in bundle: .app/Contents/MacOS/wwkd
+        let embeddedBin = bundleURL
+            .appendingPathComponent("Contents")
+            .appendingPathComponent("MacOS")
+            .appendingPathComponent("wwkd")
+        if FileManager.default.isExecutableFile(atPath: embeddedBin.path) {
+            return embeddedBin.path
+        }
+        // Standard Homebrew locations
+        for candidate in ["/opt/homebrew/bin/wwkd", "/usr/local/bin/wwkd"] {
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        // PATH lookup
+        let (code, out, _) = shell(["which", "wwkd"])
+        if code == 0, !out.isEmpty {
+            return out
+        }
+        return nil
+    }
+
+    /// Generate launchd plist XML content for the wwkd agent
+    private nonisolated func generatePlistContent(wwkdPath: String) -> String {
+        let label = launchdLabel
+        return """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" \
+        "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>Label</key>
+            <string>\(label)</string>
+            <key>Program</key>
+            <string>\(wwkdPath)</string>
+            <key>RunAtLoad</key>
+            <true/>
+            <key>KeepAlive</key>
+            <dict>
+                <key>SuccessfulExit</key>
+                <false/>
+            </dict>
+            <key>StandardOutPath</key>
+            <string>/tmp/\(label).stdout.log</string>
+            <key>StandardErrorPath</key>
+            <string>/tmp/\(label).stderr.log</string>
+            <key>ProcessType</key>
+            <string>Background</string>
+        </dict>
+        </plist>
+        """
+    }
+
+    /// Create the plist at ~/Library/LaunchAgents/ and bootstrap it.
+    /// Returns true on success.
+    @discardableResult
+    private nonisolated func createAndInstallPlist() -> Bool {
+        guard let wwkdPath = findWwkdBinary() else {
+            prefLog.error("Cannot find wwkd binary — unable to create plist")
+            return false
+        }
+        let plistPath = AgentLifecycleManager.cliPlistPath
+        let launchAgentDir = (plistPath as NSString).deletingLastPathComponent
+
+        // Create ~/Library/LaunchAgents/ if needed
+        try? FileManager.default.createDirectory(
+            atPath: launchAgentDir, withIntermediateDirectories: true
+        )
+
+        // Bootout existing service if somehow loaded
+        if isServiceLoaded() {
+            _ = shell(["launchctl", "bootout", "gui/\(getuid())", plistPath])
+        }
+
+        // Write plist
+        let content = generatePlistContent(wwkdPath: wwkdPath)
+        do {
+            try content.write(toFile: plistPath, atomically: true, encoding: .utf8)
+            prefLog.info("Created plist at \(plistPath) → wwkd: \(wwkdPath)")
+        } catch {
+            prefLog.error("Failed to write plist: \(error)")
+            return false
+        }
+
+        // Bootstrap
+        let (code, _, err) = shell([
+            "launchctl", "bootstrap", "gui/\(getuid())", plistPath,
+        ])
+        if code != 0 {
+            prefLog.error("launchctl bootstrap failed: \(err)")
+        }
+        return code == 0
+    }
+
+    /// Bootstrap an existing CLI plist into launchd so kickstart/kill commands work.
+    /// Returns true on success.
+    @discardableResult
+    private nonisolated func bootstrapCLIPlist() -> Bool {
+        let plist = AgentLifecycleManager.cliPlistPath
+        guard FileManager.default.fileExists(atPath: plist) else { return false }
+        let (code, _, err) = shell([
+            "launchctl", "bootstrap", "gui/\(getuid())", plist,
+        ])
+        if code != 0 {
+            prefLog.error("launchctl bootstrap failed: \(err)")
+        }
+        return code == 0
+    }
+
+    /// Ensure the launchd service is loaded.
+    /// 1. If already loaded → return true
+    /// 2. If CLI plist exists → bootstrap it
+    /// 3. Otherwise → create plist + bootstrap
+    private nonisolated func ensureServiceLoaded() -> Bool {
+        if isServiceLoaded() { return true }
+        prefLog.info("Service not loaded — attempting bootstrap")
+        if bootstrapCLIPlist() { return true }
+        prefLog.info("No plist to bootstrap — creating one")
+        return createAndInstallPlist()
+    }
+
+    // MARK: - Agent Control
+
     func startAgent() {
         agentStatusMessage = "Starting..."
         prefLog.info("Starting agent via launchctl kickstart")
 
-        // Clean up stale socket before starting (agent can't bind if orphan socket exists)
+        // Clean up stale socket before starting
         let sock = getIPCSocketPath()
         if FileManager.default.fileExists(atPath: sock) {
             try? FileManager.default.removeItem(atPath: sock)
@@ -310,6 +512,17 @@ final class PreferencesViewModel: ObservableObject {
         let label = launchdLabel
         Task.detached { [weak self] in
             guard let self else { return }
+
+            // Ensure service is loaded (creates plist if needed)
+            let loaded = self.ensureServiceLoaded()
+            if !loaded {
+                prefLog.error("Cannot start agent: service not loaded and all bootstrap methods failed")
+                _ = await MainActor.run { [weak self] in
+                    self?.agentStatusMessage = "Start failed: wwkd binary not found"
+                }
+                return
+            }
+
             let (code, _, err) = self.shell([
                 "launchctl", "kickstart", "-k",
                 "gui/\(getuid())/\(label)",
@@ -332,13 +545,28 @@ final class PreferencesViewModel: ObservableObject {
         let label = launchdLabel
         Task.detached { [weak self] in
             guard let self else { return }
-            let (code, _, err) = self.shell([
-                "launchctl", "kill", "SIGTERM",
-                "gui/\(getuid())/\(label)",
-            ])
-            prefLog.info("launchctl kill exited with status \(code)")
-            if code != 0 {
-                prefLog.error("launchctl kill failed: \(err)")
+
+            var stopped = false
+            if self.isServiceLoaded() {
+                let (code, _, err) = self.shell([
+                    "launchctl", "kill", "SIGTERM",
+                    "gui/\(getuid())/\(label)",
+                ])
+                prefLog.info("launchctl kill exited with status \(code)")
+                stopped = (code == 0)
+                if code != 0 {
+                    prefLog.error("launchctl kill failed: \(err)")
+                }
+            } else {
+                prefLog.info("Service not loaded in launchd, skipping launchctl kill")
+            }
+
+            // Fallback: pkill if launchctl kill didn't work or service wasn't loaded
+            if !stopped {
+                let (pkCode, _, _) = self.shell(["pkill", "-x", "wwkd"])
+                if pkCode == 0 {
+                    prefLog.info("Stopped agent via pkill fallback")
+                }
             }
 
             // Clean up socket after stop
@@ -362,7 +590,17 @@ final class PreferencesViewModel: ObservableObject {
         let label = launchdLabel
         Task.detached { [weak self] in
             guard let self else { return }
-            // kickstart -k kills the running instance and immediately restarts it
+
+            // Bootstrap first if service is not loaded
+            let loaded = self.ensureServiceLoaded()
+            if !loaded {
+                prefLog.error("Cannot restart agent: service not loaded and bootstrap failed")
+                _ = await MainActor.run { [weak self] in
+                    self?.agentStatusMessage = "Restart failed: service not loaded (no plist?)"
+                }
+                return
+            }
+
             let (code, _, err) = self.shell([
                 "launchctl", "kickstart", "-k",
                 "gui/\(getuid())/\(label)",
@@ -393,29 +631,76 @@ final class PreferencesViewModel: ObservableObject {
     }
 
     func registerAgent() {
-        do {
-            try AgentLifecycleManager.shared.register()
-        } catch {
-            agentStatusMessage = "Registration failed: \(error.localizedDescription)"
+        let lifecycle = AgentLifecycleManager.shared
+
+        // Try ensureServiceLoaded which handles:
+        //   1. Already loaded → done
+        //   2. CLI plist exists → bootstrap it
+        //   3. No plist → create one and bootstrap
+        let loaded = ensureServiceLoaded()
+        if loaded {
+            agentStatusMessage = "Agent registered and service loaded"
+            prefLog.info("Agent registered successfully")
+        } else {
+            // Last resort: try SMAppService (only works for signed/notarized bundles)
+            do {
+                try lifecycle.register()
+                agentStatusMessage = "Agent registered via SMAppService"
+            } catch {
+                agentStatusMessage = "Registration failed: wwkd binary not found"
+                prefLog.error("registerAgent: all methods failed — \(error)")
+            }
         }
-        AgentLifecycleManager.shared.refreshStatus()
-        registrationStatusText = AgentLifecycleManager.shared.statusDescription
-        agentRegistered = AgentLifecycleManager.shared.isRegistered
-        agentEnabled = AgentLifecycleManager.shared.isEnabled
-        requiresApproval = AgentLifecycleManager.shared.requiresApproval
+
+        lifecycle.refreshStatus()
+        registrationStatusText = lifecycle.statusDescription
+        agentRegistered = lifecycle.isRegistered
+        agentEnabled = lifecycle.isEnabled
+        requiresApproval = lifecycle.requiresApproval
     }
 
     func unregisterAgent() {
-        do {
-            try AgentLifecycleManager.shared.unregister()
-        } catch {
-            agentStatusMessage = "Unregistration failed: \(error.localizedDescription)"
+        let lifecycle = AgentLifecycleManager.shared
+        let plistPath = AgentLifecycleManager.cliPlistPath
+
+        if lifecycle.cliPlistExists {
+            // CLI plist exists — bootout from launchd and remove the plist
+            prefLog.info("CLI plist detected — booting out and removing")
+
+            // Kill the running agent first
+            if isServiceLoaded() {
+                let (_, _, _) = shell([
+                    "launchctl", "bootout",
+                    "gui/\(getuid())", plistPath,
+                ])
+            }
+            // Fallback: pkill
+            let (_, _, _) = shell(["pkill", "-x", "wwkd"])
+
+            // Remove the plist file
+            try? FileManager.default.removeItem(atPath: plistPath)
+
+            // Clean up socket
+            let sock = getIPCSocketPath()
+            if FileManager.default.fileExists(atPath: sock) {
+                try? FileManager.default.removeItem(atPath: sock)
+            }
+
+            agentStatusMessage = "Agent unregistered (CLI plist removed)"
+        } else {
+            // No CLI plist — use SMAppService unregistration
+            do {
+                try lifecycle.unregister()
+            } catch {
+                agentStatusMessage = "Unregistration failed: \(error.localizedDescription)"
+            }
         }
-        AgentLifecycleManager.shared.refreshStatus()
-        registrationStatusText = AgentLifecycleManager.shared.statusDescription
-        agentRegistered = AgentLifecycleManager.shared.isRegistered
-        agentEnabled = AgentLifecycleManager.shared.isEnabled
-        requiresApproval = AgentLifecycleManager.shared.requiresApproval
+
+        lifecycle.refreshStatus()
+        registrationStatusText = lifecycle.statusDescription
+        agentRegistered = lifecycle.isRegistered
+        agentEnabled = lifecycle.isEnabled
+        requiresApproval = lifecycle.requiresApproval
     }
 
     func openLoginItemsSettings() {
@@ -630,43 +915,75 @@ struct PermissionsPreferencesView: View {
     var body: some View {
         Form {
             Section("Accessibility Permission") {
-                HStack {
-                    Image(systemName: viewModel.accessibilityGranted ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .foregroundColor(viewModel.accessibilityGranted ? .green : .red)
-                    Text(viewModel.accessibilityGranted ? "Permission granted ✓" : "Permission not granted")
-                        .fontWeight(.medium)
-                    Spacer()
-                    if viewModel.isRefreshing {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
-                }
-
-                if !viewModel.accessibilityGranted {
-                    Text("Window title capture requires Accessibility permission. Click \"Request Permission\" to trigger the system prompt, or open System Settings and add this app manually.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                } else {
-                    Text("Accessibility permission is active for this app.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                // Agent's own AX status (separate executable)
-                if viewModel.agentRunning {
+                // --- GUI app status ---
+                VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Image(systemName: viewModel.agentAccessibilityGranted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                            .foregroundColor(viewModel.agentAccessibilityGranted ? .green : .orange)
-                        Text(viewModel.agentAccessibilityGranted
-                             ? "Agent (wwkd) has accessibility permission ✓"
-                             : "Agent (wwkd) needs accessibility permission")
-                            .font(.caption)
+                        Image(systemName: viewModel.accessibilityGranted ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundColor(viewModel.accessibilityGranted ? .green : .red)
+                        Text(viewModel.accessibilityGranted ? "GUI app — permission granted ✓" : "GUI app — permission NOT granted")
+                            .fontWeight(.medium)
+                        Spacer()
+                        if viewModel.isRefreshing {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
                     }
-                    if !viewModel.agentAccessibilityGranted {
-                        Text("The agent binary also needs Accessibility permission for window title capture. Add the wwkd binary in System Settings → Privacy & Security → Accessibility.")
+                    HStack(spacing: 4) {
+                        Text(viewModel.appBundlePath)
+                            .font(.system(.caption2, design: .monospaced))
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Button {
+                            viewModel.copyToClipboard(viewModel.appBundlePath)
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption2)
+                        .help("Copy path")
+                    }
+                }
+
+                // --- Agent status ---
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Image(systemName: (viewModel.agentRunning && viewModel.agentAccessibilityGranted)
+                              ? "checkmark.circle.fill"
+                              : "xmark.circle.fill")
+                            .foregroundColor((viewModel.agentRunning && viewModel.agentAccessibilityGranted)
+                                             ? .green
+                                             : (viewModel.agentRunning ? .orange : .secondary))
+                        Text(viewModel.agentRunning
+                             ? (viewModel.agentAccessibilityGranted
+                                ? "Agent (wwkd) — permission granted ✓"
+                                : "Agent (wwkd) — permission NOT granted")
+                             : "Agent (wwkd) — not running")
+                            .fontWeight(.medium)
+                    }
+                    HStack(spacing: 4) {
+                        Text(viewModel.agentBinaryPath)
+                            .font(.system(.caption2, design: .monospaced))
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if viewModel.agentBinaryPath != "(not found)" {
+                            Button {
+                                viewModel.copyToClipboard(viewModel.agentBinaryPath)
+                            } label: {
+                                Image(systemName: "doc.on.doc")
+                            }
+                            .buttonStyle(.borderless)
                             .font(.caption2)
-                            .foregroundColor(.secondary)
+                            .help("Copy path")
+                        }
                     }
+                }
+
+                if !viewModel.accessibilityGranted || (viewModel.agentRunning && !viewModel.agentAccessibilityGranted) {
+                    Text("Window title capture requires Accessibility permission for BOTH the GUI app and the agent (wwkd). Click \"Request Permission\" first. If that doesn't work, use \"Open System Settings\" and follow the steps below.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
 
                 HStack(spacing: 8) {
@@ -675,15 +992,117 @@ struct PermissionsPreferencesView: View {
                     }
                     .disabled(viewModel.accessibilityGranted)
 
-                    Button("Open Settings") {
-                        viewModel.openAccessibilitySettings()
-                    }
-
                     Button {
                         Task { await viewModel.refreshStatus() }
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
+                }
+            }
+
+            Section("How to Grant Accessibility (Manual Steps)") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("If \"Request Permission\" didn't show a prompt, add these items manually:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    // Step 1
+                    HStack(alignment: .top, spacing: 6) {
+                        Text("1.")
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .frame(width: 18, alignment: .trailing)
+                        Text("Click \"Open System Settings\" below. It opens Privacy & Security → Accessibility.")
+                            .font(.caption)
+                    }
+
+                    // Step 2
+                    HStack(alignment: .top, spacing: 6) {
+                        Text("2.")
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .frame(width: 18, alignment: .trailing)
+                        Text("Click the 🔒 lock icon (bottom-left), then click the \"+\" button.")
+                            .font(.caption)
+                    }
+
+                    // Step 3 — GUI app
+                    HStack(alignment: .top, spacing: 6) {
+                        Text("3.")
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .frame(width: 18, alignment: .trailing)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Add the **GUI app**:")
+                                .font(.caption)
+                            Text(viewModel.appBundlePath)
+                                .font(.system(.caption2, design: .monospaced))
+                                .textSelection(.enabled)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                            HStack(spacing: 6) {
+                                Button {
+                                    viewModel.copyToClipboard(viewModel.appBundlePath)
+                                } label: {
+                                    Label("Copy", systemImage: "doc.on.doc")
+                                }
+                                .font(.caption2)
+                                Button {
+                                    viewModel.revealAppInFinder()
+                                } label: {
+                                    Label("Reveal", systemImage: "folder")
+                                }
+                                .font(.caption2)
+                            }
+                        }
+                    }
+
+                    // Step 4 — Agent binary
+                    HStack(alignment: .top, spacing: 6) {
+                        Text("4.")
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .frame(width: 18, alignment: .trailing)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Add the **agent binary** (wwkd):")
+                                .font(.caption)
+                            Text(viewModel.agentBinaryPath)
+                                .font(.system(.caption2, design: .monospaced))
+                                .textSelection(.enabled)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                            if viewModel.agentBinaryPath != "(not found)" {
+                                HStack(spacing: 6) {
+                                    Button {
+                                        viewModel.copyToClipboard(viewModel.agentBinaryPath)
+                                    } label: {
+                                        Label("Copy", systemImage: "doc.on.doc")
+                                    }
+                                    .font(.caption2)
+                                    Button {
+                                        viewModel.revealAgentInFinder()
+                                    } label: {
+                                        Label("Reveal", systemImage: "folder")
+                                    }
+                                    .font(.caption2)
+                                }
+                            }
+                        }
+                    }
+
+                    // Step 5
+                    HStack(alignment: .top, spacing: 6) {
+                        Text("5.")
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .frame(width: 18, alignment: .trailing)
+                        Text("Toggle BOTH items ON, then come back and click Refresh.")
+                            .font(.caption)
+                    }
+                }
+
+                Button("Open System Settings") {
+                    viewModel.openAccessibilitySettings()
                 }
             }
 

@@ -17,10 +17,10 @@ final class AgentLifecycleManager: ObservableObject {
     private static let agentPlistName = "com.daylily.wellwhaddyaknow.agent.plist"
 
     /// The launchd label shared by both SMAppService and CLI plists
-    static let launchdLabel = "com.daylily.wellwhaddyaknow.agent"
+    nonisolated static let launchdLabel = "com.daylily.wellwhaddyaknow.agent"
 
     /// Path to the CLI-installed plist (written by `wwk agent install`)
-    static var cliPlistPath: String {
+    nonisolated static var cliPlistPath: String {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents")
             .appendingPathComponent("\(launchdLabel).plist")

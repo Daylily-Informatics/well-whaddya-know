@@ -138,14 +138,19 @@ public enum Aggregations {
             .reduce(0.0) { $0 + $1.durationSeconds }
     }
 
-    // MARK: - Totals by Hour
+    // MARK: - Period Grouping Strategy
 
-    /// Grouping strategy for hourly aggregation
-    public enum HourlyGroupBy: Sendable {
+    /// Grouping strategy for time-bucketed aggregation
+    public enum PeriodGroupBy: Sendable {
         case app
         case appWindow
         case tag
     }
+
+    /// Backwards-compatible alias
+    public typealias HourlyGroupBy = PeriodGroupBy
+
+    // MARK: - Totals by Hour
 
     /// Aggregate observed time into hourly buckets grouped by app, app+window, or tag.
     ///
@@ -191,12 +196,109 @@ public enum Aggregations {
             .sorted { $0.hour != $1.hour ? $0.hour < $1.hour : $0.label < $1.label }
     }
 
+    // MARK: - Totals by Day (grouped)
+
+    /// Aggregate observed time into daily buckets grouped by category.
+    /// Segments are split at midnight boundaries via DailySplitter for accuracy.
+    public static func totalsByDayGrouped(
+        segments: [EffectiveSegment],
+        timeZone: TimeZone,
+        groupBy: PeriodGroupBy
+    ) -> [(period: String, label: String, seconds: Double)] {
+        let split = DailySplitter.splitSegmentsByDay(segments: segments, timeZone: timeZone)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+
+        struct BK: Hashable { let period: String; let label: String }
+        var buckets: [BK: Double] = [:]
+
+        for seg in split where seg.coverage == .observed {
+            let date = Date(timeIntervalSince1970: Double(seg.startTsUs) / 1_000_000.0)
+            let comps = calendar.dateComponents([.year, .month, .day], from: date)
+            let period = String(format: "%04d-%02d-%02d", comps.year ?? 0, comps.month ?? 0, comps.day ?? 0)
+            for lbl in labelsForSegment(seg, groupBy: groupBy) {
+                buckets[BK(period: period, label: lbl), default: 0.0] += seg.durationSeconds
+            }
+        }
+
+        return buckets
+            .map { (period: $0.key.period, label: $0.key.label, seconds: $0.value) }
+            .sorted { $0.period != $1.period ? $0.period < $1.period : $0.label < $1.label }
+    }
+
+    // MARK: - Totals by Week (grouped)
+
+    /// Aggregate observed time into ISO-week buckets grouped by category.
+    /// Segments are split at midnight first, then assigned to their ISO week.
+    public static func totalsByWeekGrouped(
+        segments: [EffectiveSegment],
+        timeZone: TimeZone,
+        groupBy: PeriodGroupBy
+    ) -> [(period: String, label: String, seconds: Double)] {
+        let split = DailySplitter.splitSegmentsByDay(segments: segments, timeZone: timeZone)
+        var calendar = Calendar(identifier: .iso8601)
+        calendar.timeZone = timeZone
+
+        struct BK: Hashable { let period: String; let label: String }
+        var buckets: [BK: Double] = [:]
+
+        for seg in split where seg.coverage == .observed {
+            let date = Date(timeIntervalSince1970: Double(seg.startTsUs) / 1_000_000.0)
+            let comps = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: date)
+            let period = String(format: "%04d-W%02d", comps.yearForWeekOfYear ?? 0, comps.weekOfYear ?? 0)
+            for lbl in labelsForSegment(seg, groupBy: groupBy) {
+                buckets[BK(period: period, label: lbl), default: 0.0] += seg.durationSeconds
+            }
+        }
+
+        return buckets
+            .map { (period: $0.key.period, label: $0.key.label, seconds: $0.value) }
+            .sorted { $0.period != $1.period ? $0.period < $1.period : $0.label < $1.label }
+    }
+
+    // MARK: - Totals by Month (grouped)
+
+    /// Aggregate observed time into year-month buckets grouped by category.
+    /// Segments are split at midnight first, then assigned to their calendar month.
+    public static func totalsByMonthGrouped(
+        segments: [EffectiveSegment],
+        timeZone: TimeZone,
+        groupBy: PeriodGroupBy
+    ) -> [(period: String, label: String, seconds: Double)] {
+        let split = DailySplitter.splitSegmentsByDay(segments: segments, timeZone: timeZone)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+
+        struct BK: Hashable { let period: String; let label: String }
+        var buckets: [BK: Double] = [:]
+
+        let monthNames = ["Jan","Feb","Mar","Apr","May","Jun",
+                          "Jul","Aug","Sep","Oct","Nov","Dec"]
+
+        for seg in split where seg.coverage == .observed {
+            let date = Date(timeIntervalSince1970: Double(seg.startTsUs) / 1_000_000.0)
+            let comps = calendar.dateComponents([.year, .month], from: date)
+            let m = (comps.month ?? 1) - 1
+            let period = String(format: "%04d-%02d", comps.year ?? 0, (comps.month ?? 1))
+            let displayPeriod = "\(monthNames[min(max(m, 0), 11)]) \(comps.year ?? 0)"
+            // Use sortable key for ordering but store display label
+            _ = displayPeriod
+            for lbl in labelsForSegment(seg, groupBy: groupBy) {
+                buckets[BK(period: period, label: lbl), default: 0.0] += seg.durationSeconds
+            }
+        }
+
+        return buckets
+            .map { (period: $0.key.period, label: $0.key.label, seconds: $0.value) }
+            .sorted { $0.period != $1.period ? $0.period < $1.period : $0.label < $1.label }
+    }
+
     // MARK: - Private Helpers
 
     /// Extract label(s) for a segment based on grouping strategy
     private static func labelsForSegment(
         _ segment: EffectiveSegment,
-        groupBy: HourlyGroupBy
+        groupBy: PeriodGroupBy
     ) -> [String] {
         switch groupBy {
         case .app:

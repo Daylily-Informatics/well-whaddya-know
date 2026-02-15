@@ -36,7 +36,7 @@ struct ViewerWindow: View {
             }
             .navigationTitle(selectedTab.title)
         }
-        .frame(minWidth: 800, minHeight: 500)
+        .frame(minWidth: 800, maxWidth: .infinity, minHeight: 500, maxHeight: .infinity)
     }
 }
 
@@ -898,7 +898,7 @@ struct CorruptSegmentsSheet: View {
                 }
             }
         }
-        .frame(minWidth: 560, minHeight: 340)
+        .frame(minWidth: 560, maxWidth: .infinity, minHeight: 340, maxHeight: .infinity)
     }
 
     @ViewBuilder
@@ -1032,6 +1032,7 @@ struct DateRangePresetPicker: View {
             .padding(.horizontal)
             .padding(.vertical, 6)
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -1524,7 +1525,7 @@ enum ReportGrouping: String, CaseIterable, Identifiable {
 
 enum ReportVisualizationMode: String, CaseIterable, Identifiable {
     case table = "Table"
-    case hourlyBar = "Hourly Bar"
+    case bar = "Bar"
     case spaceFill = "Space Fill"
     case gantt = "Timeline"
 
@@ -1533,11 +1534,19 @@ enum ReportVisualizationMode: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .table: return "tablecells"
-        case .hourlyBar: return "chart.bar.xaxis"
+        case .bar: return "chart.bar.xaxis"
         case .spaceFill: return "cube.fill"
         case .gantt: return "calendar.day.timeline.left"
         }
     }
+}
+
+enum BarChartTimeBucket: String, CaseIterable, Identifiable {
+    case hour = "Hour"
+    case day = "Day"
+    case week = "Week"
+    case month = "Month"
+    var id: String { rawValue }
 }
 
 struct ReportsTabView: View {
@@ -1545,6 +1554,7 @@ struct ReportsTabView: View {
     @State private var selectedGrouping: ReportGrouping = .byApp
     @State private var visualizationMode: ReportVisualizationMode = .table
     @State private var displayMode: ReportDisplayMode = .raw
+    @State private var timeBucket: BarChartTimeBucket = .hour
     @State private var tagOperationMessage: String? = nil
     @State private var showingTagAlert: Bool = false
 
@@ -1614,6 +1624,19 @@ struct ReportsTabView: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(maxWidth: 160)
+
+                if visualizationMode == .bar {
+                    Divider()
+                        .frame(height: 20)
+
+                    Picker("Time", selection: $timeBucket) {
+                        ForEach(BarChartTimeBucket.allCases) { b in
+                            Text(b.rawValue).tag(b)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 220)
+                }
             }
             .padding(.horizontal)
             .padding(.vertical, 6)
@@ -1676,11 +1699,13 @@ struct ReportsTabView: View {
                         ReportsTableView(data: data, grouping: selectedGrouping, displayMode: displayMode)
                             .id(displayMode)
 
-                    case .hourlyBar:
-                        HourlyBarChartView(
+                    case .bar:
+                        BarChartView(
                             segments: viewModel.reportSegments,
                             grouping: selectedGrouping,
                             tags: viewModel.tags,
+                            displayMode: displayMode,
+                            timeBucket: timeBucket,
                             onFilterApp: { appName in
                                 viewModel.setReportFilter(appName)
                             },
@@ -1697,6 +1722,7 @@ struct ReportsTabView: View {
                                 }
                             }
                         )
+                        .id("\(displayMode)-\(timeBucket)")
                         .padding()
 
                     case .spaceFill:
@@ -1704,6 +1730,7 @@ struct ReportsTabView: View {
                             segments: viewModel.reportSegments,
                             grouping: selectedGrouping,
                             tags: viewModel.tags,
+                            displayMode: displayMode,
                             onFilterApp: { appName in
                                 viewModel.setReportFilter(appName)
                             },
@@ -1720,6 +1747,7 @@ struct ReportsTabView: View {
                                 }
                             }
                         )
+                        .id(displayMode)
                         .padding()
 
                     case .gantt:
@@ -1853,7 +1881,7 @@ struct ReportsTabView: View {
 struct ReportsChartView: View {
     let data: [ReportRow]
     let grouping: ReportGrouping
-    var displayMode: ReportDisplayMode = .raw
+    let displayMode: ReportDisplayMode
     @State private var hoveredLabel: String?
 
     private var isProportional: Bool { displayMode == .proportional }
@@ -1899,6 +1927,7 @@ struct ReportsChartView: View {
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
                 }
             }
+            .id(displayMode)
             .chartXAxisLabel(isProportional ? "% of Total" : "Hours")
             .chartXAxis {
                 AxisMarks(position: .bottom)
@@ -1995,7 +2024,7 @@ struct ReportsChartView: View {
 struct ReportsTableView: View {
     let data: [ReportRow]
     let grouping: ReportGrouping
-    var displayMode: ReportDisplayMode = .raw
+    let displayMode: ReportDisplayMode
 
     private var isProportional: Bool { displayMode == .proportional }
 
@@ -2033,6 +2062,7 @@ struct ReportsTableView: View {
             }
             .width(min: 80, ideal: 100)
         }
+        .id(displayMode)
     }
 
     private func tableName(for row: ReportRow) -> String {
@@ -2058,54 +2088,113 @@ struct ReportsTableView: View {
 }
 
 
-// MARK: - Hourly Bar Chart View
+// MARK: - Bar Chart View
 
-/// Data point for the hourly stacked bar chart
-private struct HourlyDataPoint: Identifiable {
+/// Data point for the stacked bar chart (any time bucket)
+private struct BarDataPoint: Identifiable {
     let id = UUID()
-    let hourLabel: String
-    let hour: Int
+    let periodLabel: String   // X-axis label ("14:00", "2026-02-15", "W07", "2026-02")
+    let periodKey: String     // sortable key for hover matching
     let category: String
     let minutes: Double
 }
 
-struct HourlyBarChartView: View {
+struct BarChartView: View {
     let segments: [EffectiveSegment]
     let grouping: ReportGrouping
     let tags: [TagItem]
+    let displayMode: ReportDisplayMode
+    let timeBucket: BarChartTimeBucket
     var onFilterApp: ((String) -> Void)? = nil
     var onApplyTag: ((String, Int?, String) -> Void)? = nil
 
     @State private var hoveredCategory: String? = nil
-    @State private var hoveredHour: Int? = nil
+    @State private var hoveredPeriod: String? = nil
 
-    private var dataPoints: [HourlyDataPoint] {
-        let tz = DisplayTimezoneHelper.preferred
-        let hourlyGroupBy: Aggregations.HourlyGroupBy = {
-            switch grouping {
-            case .byApp: return .app
-            case .byAppWindow: return .appWindow
-            case .byTag: return .tag
-            }
-        }()
-        let raw = Aggregations.totalsByHour(
-            segments: segments, timeZone: tz, groupBy: hourlyGroupBy
-        )
-        return raw.map { entry in
-            HourlyDataPoint(
-                hourLabel: String(format: "%02d:00", entry.hour),
-                hour: entry.hour,
-                category: entry.label,
-                minutes: entry.seconds / 60.0
-            )
+    private var isProportional: Bool { displayMode == .proportional }
+
+    private var periodGroupBy: Aggregations.PeriodGroupBy {
+        switch grouping {
+        case .byApp: return .app
+        case .byAppWindow: return .appWindow
+        case .byTag: return .tag
         }
     }
 
-    /// Categories present in the hovered hour
-    private var categoriesInHoveredHour: [String] {
-        guard let h = hoveredHour else { return [] }
-        let hourLabel = String(format: "%02d:00", h)
-        return Array(Set(dataPoints.filter { $0.hourLabel == hourLabel }.map(\.category))).sorted()
+    private var dataPoints: [BarDataPoint] {
+        let tz = DisplayTimezoneHelper.preferred
+        switch timeBucket {
+        case .hour:
+            let raw = Aggregations.totalsByHour(
+                segments: segments, timeZone: tz, groupBy: periodGroupBy
+            )
+            return raw.map {
+                BarDataPoint(
+                    periodLabel: String(format: "%02d:00", $0.hour),
+                    periodKey: String(format: "%02d", $0.hour),
+                    category: $0.label,
+                    minutes: $0.seconds / 60.0
+                )
+            }
+        case .day:
+            let raw = Aggregations.totalsByDayGrouped(
+                segments: segments, timeZone: tz, groupBy: periodGroupBy
+            )
+            return raw.map {
+                // Show short date: "Feb 15"
+                let display = Self.shortDayLabel($0.period)
+                return BarDataPoint(
+                    periodLabel: display,
+                    periodKey: $0.period,
+                    category: $0.label,
+                    minutes: $0.seconds / 60.0
+                )
+            }
+        case .week:
+            let raw = Aggregations.totalsByWeekGrouped(
+                segments: segments, timeZone: tz, groupBy: periodGroupBy
+            )
+            return raw.map {
+                BarDataPoint(
+                    periodLabel: $0.period,  // "2026-W07"
+                    periodKey: $0.period,
+                    category: $0.label,
+                    minutes: $0.seconds / 60.0
+                )
+            }
+        case .month:
+            let raw = Aggregations.totalsByMonthGrouped(
+                segments: segments, timeZone: tz, groupBy: periodGroupBy
+            )
+            return raw.map {
+                let display = Self.shortMonthLabel($0.period)
+                return BarDataPoint(
+                    periodLabel: display,
+                    periodKey: $0.period,
+                    category: $0.label,
+                    minutes: $0.seconds / 60.0
+                )
+            }
+        }
+    }
+
+    private var totalMinutes: Double {
+        dataPoints.reduce(0) { $0 + $1.minutes }
+    }
+
+    /// Categories present in the hovered period
+    private var categoriesInHoveredPeriod: [String] {
+        guard let p = hoveredPeriod else { return [] }
+        return Array(Set(dataPoints.filter { $0.periodLabel == p }.map(\.category))).sorted()
+    }
+
+    private var xAxisLabel: String {
+        switch timeBucket {
+        case .hour: return "Hour of Day"
+        case .day: return "Day"
+        case .week: return "Week"
+        case .month: return "Month"
+        }
     }
 
     var body: some View {
@@ -2114,24 +2203,28 @@ struct HourlyBarChartView: View {
                 Image(systemName: "chart.bar.xaxis")
                     .font(.system(size: 48))
                     .foregroundColor(.secondary)
-                Text("No hourly data for selected range")
+                Text("No data for selected range")
                     .font(.headline)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             VStack(spacing: 4) {
                 Chart(dataPoints) { dp in
+                    let yValue = isProportional
+                        ? (totalMinutes > 0 ? dp.minutes / totalMinutes * 100.0 : 0)
+                        : dp.minutes
                     BarMark(
-                        x: .value("Hour", dp.hourLabel),
-                        y: .value("Minutes", dp.minutes)
+                        x: .value("Period", dp.periodLabel),
+                        y: .value(isProportional ? "%" : "Minutes", yValue)
                     )
                     .foregroundStyle(by: .value("Category", dp.category))
-                    .opacity(hoveredHour == nil || dp.hour == hoveredHour ? 1.0 : 0.4)
+                    .opacity(hoveredPeriod == nil || dp.periodLabel == hoveredPeriod ? 1.0 : 0.4)
                 }
-                .chartXAxisLabel("Hour of Day")
-                .chartYAxisLabel("Minutes")
+                .id("\(displayMode)-\(timeBucket)")
+                .chartXAxisLabel(xAxisLabel)
+                .chartYAxisLabel(isProportional ? "% of Total" : "Minutes")
                 .chartLegend(position: .bottom, spacing: 8)
-                .frame(minHeight: 300, idealHeight: 400)
+                .frame(minHeight: 300, idealHeight: 400, maxHeight: .infinity)
                 .chartOverlay { proxy in
                     GeometryReader { _ in
                         Rectangle()
@@ -2140,23 +2233,54 @@ struct HourlyBarChartView: View {
                             .onContinuousHover { phase in
                                 switch phase {
                                 case .active(let location):
-                                    if let hourLabel: String = proxy.value(atX: location.x) {
-                                        hoveredHour = Int(hourLabel.prefix(2))
-                                        // Find the closest category by checking Y position
-                                        hoveredCategory = categoriesInHoveredHour.first
+                                    if let periodLabel: String = proxy.value(atX: location.x) {
+                                        hoveredPeriod = periodLabel
+                                        hoveredCategory = categoriesInHoveredPeriod.first
                                     }
                                 case .ended:
-                                    hoveredHour = nil
+                                    hoveredPeriod = nil
                                     hoveredCategory = nil
                                 }
                             }
                     }
                 }
+                .overlay(alignment: .topTrailing) {
+                    if let p = hoveredPeriod {
+                        let cats = categoriesInHoveredPeriod
+                        let periodTotal = dataPoints.filter { $0.periodLabel == p }
+                            .reduce(0.0) { $0 + $1.minutes }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(p)
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                            ForEach(cats.prefix(5), id: \.self) { cat in
+                                let catMin = dataPoints.filter { $0.periodLabel == p && $0.category == cat }
+                                    .reduce(0.0) { $0 + $1.minutes }
+                                let pct = totalMinutes > 0 ? catMin / totalMinutes * 100.0 : 0
+                                Text("\(cat): \(Self.fmtMinutes(catMin))  (\(String(format: "%.1f%%", pct)))")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            if cats.count > 5 {
+                                Text("+ \(cats.count - 5) more")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            Divider().frame(maxWidth: 120)
+                            Text("Total: \(Self.fmtMinutes(periodTotal))")
+                                .font(.caption2)
+                                .fontWeight(.medium)
+                        }
+                        .padding(6)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
+                        .padding(8)
+                        .transition(.opacity)
+                    }
+                }
                 .contextMenu {
-                    if let h = hoveredHour {
-                        let cats = categoriesInHoveredHour
+                    if hoveredPeriod != nil {
+                        let cats = categoriesInHoveredPeriod
                         if cats.count == 1, let cat = cats.first {
-                            // Single category — direct actions
                             Button {
                                 onFilterApp?(cat)
                             } label: {
@@ -2166,11 +2290,12 @@ struct HourlyBarChartView: View {
 
                             Divider()
 
-                            Menu("Apply Tag to '\(cat)' at \(String(format: "%02d", h)):00…") {
-                                tagMenuContent(category: cat, hour: h)
+                            if timeBucket == .hour, let h = Int(hoveredPeriod?.prefix(2) ?? "") {
+                                Menu("Apply Tag to '\(cat)' at \(String(format: "%02d", h)):00…") {
+                                    tagMenuContent(category: cat, hour: h)
+                                }
                             }
                         } else {
-                            // Multiple categories in this hour
                             Menu("Filter For…") {
                                 ForEach(cats, id: \.self) { cat in
                                     Button(cat) { onFilterApp?(cat) }
@@ -2179,10 +2304,12 @@ struct HourlyBarChartView: View {
 
                             Divider()
 
-                            Menu("Apply Tag…") {
-                                ForEach(cats, id: \.self) { cat in
-                                    Menu("\(cat) at \(String(format: "%02d", h)):00") {
-                                        tagMenuContent(category: cat, hour: h)
+                            if timeBucket == .hour, let h = Int(hoveredPeriod?.prefix(2) ?? "") {
+                                Menu("Apply Tag…") {
+                                    ForEach(cats, id: \.self) { cat in
+                                        Menu("\(cat) at \(String(format: "%02d", h)):00") {
+                                            tagMenuContent(category: cat, hour: h)
+                                        }
                                     }
                                 }
                             }
@@ -2193,7 +2320,7 @@ struct HourlyBarChartView: View {
                     }
                 }
 
-                Text("Stacked by \(grouping.rawValue.lowercased()) · Right-click bars for actions")
+                Text("Stacked by \(grouping.rawValue.lowercased()) · \(timeBucket.rawValue) buckets · Right-click bars for actions")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
@@ -2212,6 +2339,39 @@ struct HourlyBarChartView: View {
                 onApplyTag?(category, hour, tag.name)
             }
         }
+    }
+
+    /// Format minutes as "Xh Ym" or "Ym Zs"
+    private static func fmtMinutes(_ mins: Double) -> String {
+        let total = Int(max(0, mins * 60))
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        if h > 0 { return String(format: "%dh %02dm", h, m) }
+        if m > 0 { return String(format: "%dm %02ds", m, s) }
+        return "\(s)s"
+    }
+
+    /// Convert "YYYY-MM-DD" to short label like "Feb 15"
+    private static func shortDayLabel(_ period: String) -> String {
+        let parts = period.split(separator: "-")
+        guard parts.count == 3,
+              let month = Int(parts[1]),
+              let day = Int(parts[2]) else { return period }
+        let names = ["Jan","Feb","Mar","Apr","May","Jun",
+                     "Jul","Aug","Sep","Oct","Nov","Dec"]
+        return "\(names[min(max(month - 1, 0), 11)]) \(day)"
+    }
+
+    /// Convert "YYYY-MM" to short label like "Feb 2026"
+    private static func shortMonthLabel(_ period: String) -> String {
+        let parts = period.split(separator: "-")
+        guard parts.count == 2,
+              let year = Int(parts[0]),
+              let month = Int(parts[1]) else { return period }
+        let names = ["Jan","Feb","Mar","Apr","May","Jun",
+                     "Jul","Aug","Sep","Oct","Nov","Dec"]
+        return "\(names[min(max(month - 1, 0), 11)]) \(year)"
     }
 }
 
@@ -2370,7 +2530,7 @@ struct TimelineGanttView: View {
                         .transition(.opacity)
                     }
                 }
-                .frame(minHeight: max(200, CGFloat(sortedLabels.count) * 32))
+                .frame(minHeight: max(200, CGFloat(sortedLabels.count) * 32), maxHeight: .infinity)
             }
         }
     }
@@ -2404,8 +2564,13 @@ struct SpaceFillCubeView: View {
     let segments: [EffectiveSegment]
     let grouping: ReportGrouping
     let tags: [TagItem]
+    let displayMode: ReportDisplayMode
     var onFilterApp: ((String) -> Void)? = nil
     var onApplyTag: ((String, String) -> Void)? = nil
+
+    @State private var hoveredItem: TreemapItem? = nil
+
+    private var isProportional: Bool { displayMode == .proportional }
 
     private var items: [TreemapItem] {
         var totals: [(label: String, seconds: Double)] = []
@@ -2460,7 +2625,29 @@ struct SpaceFillCubeView: View {
                         }
                     }
                 }
-                .frame(minHeight: 300, idealHeight: 400)
+                .frame(minHeight: 300, idealHeight: 400, maxHeight: .infinity)
+                .overlay(alignment: .topTrailing) {
+                    if let hi = hoveredItem {
+                        let hours = hi.seconds / 3600.0
+                        let pct = totalSeconds > 0 ? hi.seconds / totalSeconds * 100.0 : 0
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(hi.label)
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .lineLimit(2)
+                            Text(Self.fmtDuration(hi.seconds))
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Text(String(format: "%.1f%% of total (%.2fh)", pct, hours))
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(6)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
+                        .padding(8)
+                        .transition(.opacity)
+                    }
+                }
 
                 Text("Sized by duration · \(grouping.rawValue.lowercased()) · Right-click blocks for actions")
                     .font(.caption2)
@@ -2469,9 +2656,14 @@ struct SpaceFillCubeView: View {
         }
     }
 
+    private var totalSeconds: Double {
+        items.reduce(0) { $0 + $1.seconds }
+    }
+
     @ViewBuilder
     private func treemapBlock(item: TreemapItem, rect: CGRect) -> some View {
         let hours = item.seconds / 3600.0
+        let pct = totalSeconds > 0 ? item.seconds / totalSeconds * 100.0 : 0
         let label = item.label
         RoundedRectangle(cornerRadius: 4)
             .fill(item.color.opacity(0.85))
@@ -2486,7 +2678,9 @@ struct SpaceFillCubeView: View {
                         .fontWeight(.semibold)
                         .lineLimit(2)
                         .multilineTextAlignment(.center)
-                    Text(String(format: "%.1fh", hours))
+                    Text(isProportional
+                         ? String(format: "%.1f%%", pct)
+                         : String(format: "%.1fh", hours))
                         .font(.system(.caption2, design: .monospaced))
                 }
                 .foregroundColor(.white)
@@ -2519,6 +2713,20 @@ struct SpaceFillCubeView: View {
                 }
             }
             .help("\(label): \(String(format: "%.2f", hours))h")
+            .onHover { hovering in
+                hoveredItem = hovering ? item : nil
+            }
+    }
+
+    /// Format seconds as "Xh Ym" or "Ym Zs"
+    private static func fmtDuration(_ secs: Double) -> String {
+        let total = Int(max(0, secs))
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        if h > 0 { return String(format: "%dh %02dm", h, m) }
+        if m > 0 { return String(format: "%dm %02ds", m, s) }
+        return "\(s)s"
     }
 
     /// Squarified treemap layout — returns one CGRect per item
