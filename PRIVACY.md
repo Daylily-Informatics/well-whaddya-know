@@ -63,7 +63,7 @@ The application makes **zero network connections**.
 
 ## Permissions
 
-### Accessibility Permission (Optional)
+### Accessibility Permission (Optional but Recommended)
 
 If you grant Accessibility permission, the app can capture window titles for more detailed tracking. Without this permission:
 
@@ -71,10 +71,24 @@ If you grant Accessibility permission, the app can capture window titles for mor
 - Only application names are recorded (not window titles)
 - No functionality is lost, just less detail
 
+> ⚠️ **IMPORTANT**: You must grant Accessibility permission to **TWO** items:
+>
+> 1. **`WellWhaddyaKnow.app`** (the GUI app)
+> 2. **`wwkd`** (the agent binary inside the app bundle at `.app/Contents/MacOS/wwkd`)
+>
+> Adding the agent binary (`wwkd`) will **NOT appear to change anything** in System Settings.
+> The Accessibility list may look identical before and after. This is normal macOS behavior —
+> the permission IS recorded internally by the TCC database. **Do not skip adding `wwkd`.**
+>
+> If only the GUI app is granted permission, window titles will still show as "unavailable"
+> because the **agent** is the process that actually captures them.
+
+See the [README Permissions section](README.md#permissions) for detailed step-by-step instructions.
+
 ### How to Revoke
 
 1. Open **System Settings** → **Privacy & Security** → **Accessibility**
-2. Remove `WellWhaddyaKnow.app` and `wwkd` from the list
+2. Remove `WellWhaddyaKnow.app` and `wwkd` from the list (if `wwkd` is visible)
 
 ## Your Rights
 

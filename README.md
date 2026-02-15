@@ -78,9 +78,11 @@ brew install Daylily-Informatics/tap/wwk
 wwk agent install # if fails, try running with sudo... and if that fails! Move on and try the gui install path.
 
 # Step 3: Launch the GUI (menu bar app — look for the icon in your menu bar)
-wwk gui  # when first started, it will ask for some permissions, allow them. open the gui eye, the choose preferences, Request Accessibility permissions, refresh. If this fails, close the prefernces, reopen and try again *then* change to the diagnostic tab, scroll down and click register agent then refresh button.  Go back to permissions and  stop and then start the background agent. all should be green... and you are good to go.
+wwk gui
+# Click the menu bar icon → Preferences → Agent tab to manage the agent and permissions.
+# See the "Permissions" section below for CRITICAL Accessibility setup.
 
-# Step 4: Grant permissions (see Permissions section below) - may not be necessary if gui path worked
+# Step 4: Grant Accessibility permissions (REQUIRED — see Permissions section below)
 
 # Step 5: Verify
 wwk agent status    # confirm agent is running
@@ -122,28 +124,53 @@ brew uninstall wwk
 
 WellWhaddyaKnow requires specific macOS permissions to function. **Without these, tracking will not work or will be incomplete.**
 
-### 1. Accessibility (Required for Window Titles)
+### ⚠️ CRITICAL: Accessibility Permission (Two Steps Required)
 
-The `wwkd` agent needs Accessibility permission to read window titles. Without it, the app still tracks which application is active, but window titles show as "unavailable".
+> **You MUST grant Accessibility permission to TWO separate items:**
+>
+> 1. **The GUI app** (`WellWhaddyaKnow.app`)
+> 2. **The agent binary** (`wwkd`)
+>
+> ⚠️ **Adding the agent binary will NOT appear to change anything in System Settings.**
+> The Accessibility pane will look exactly the same before and after adding `wwkd`.
+> **This is normal macOS behavior — add it anyway.**
+> If you skip the agent, window titles will show as "unavailable" even though the GUI shows "Granted".
 
-**How to grant:**
+#### Step-by-step: Grant Accessibility to BOTH items
 
 1. Open **System Settings** → **Privacy & Security** → **Accessibility**
-2. Click the **+** button (you may need to unlock with your password first)
-3. Press **⌘+Shift+G** (Go to Folder) and paste:
+2. Click the **🔒 lock** icon (enter your password if prompted)
+
+**Add the GUI app (Item 1 of 2):**
+
+3. Click the **+** button
+4. Press **⌘+Shift+G** (Go to Folder) and paste:
    ```
    /opt/homebrew/opt/wwk/WellWhaddyaKnow.app
    ```
-   On Intel Macs, use `/usr/local/opt/wwk/WellWhaddyaKnow.app` instead.
-   For non-standard Homebrew prefixes, run `brew --prefix` to find yours.
-4. Select **WellWhaddyaKnow.app** and click **Open**
-5. Ensure the toggle next to it is **ON** ✅
+   _(Intel Macs: `/usr/local/opt/wwk/WellWhaddyaKnow.app` — run `brew --prefix` if unsure)_
+5. Select **WellWhaddyaKnow.app** and click **Open**
+6. Ensure the toggle next to it is **ON** ✅
 
-> **Important:** Add `WellWhaddyaKnow.app` — **not** the standalone `wwkd` binary. The agent inside the app bundle is codesigned with a stable identifier (`com.daylily.wellwhaddyaknow.agent`) that macOS TCC can track. The standalone `wwkd` at `$(brew --prefix)/bin/wwkd` has a generic linker-signed identity that macOS **silently rejects** when you try to add it to Accessibility.
+**Add the agent binary (Item 2 of 2):**
+
+7. Click the **+** button again
+8. Press **⌘+Shift+G** and paste:
+   ```
+   /opt/homebrew/opt/wwk/WellWhaddyaKnow.app/Contents/MacOS/wwkd
+   ```
+   _(Intel Macs: `/usr/local/opt/wwk/WellWhaddyaKnow.app/Contents/MacOS/wwkd`)_
+9. Select **wwkd** and click **Open**
+10. Ensure the toggle is **ON** ✅
+
+> ⚠️ **After adding `wwkd`, the Accessibility list may not visually change. This is expected.**
+> macOS does not always display agent binaries in the Accessibility list, but the permission
+> IS recorded internally by TCC. **Do not skip this step.**
 
 **Alternatively**, use the GUI:
-1. Open the WWK menu bar app → **Preferences…** → **Permissions** tab
-2. Click **Request Permission** — this triggers the native macOS prompt
+1. Open the WWK menu bar icon → **Preferences…** → **Agent** tab
+2. Under "Accessibility Permission", click **Request Permission** and **Open System Settings**
+3. Follow the Manual Steps disclosure group for guided instructions
 
 ### 2. Background Items (Login Item)
 
@@ -172,21 +199,24 @@ System Health Check
 ===================
 
 ✓ Database: Database exists and passes integrity check
-✓ Agent: Agent is running (v0.6.x, uptime Xs)
+✓ Agent: Agent is running (v0.12.x, uptime Xs)
 ✓ Accessibility: Accessibility permission granted
 
 All checks passed.
 ```
 
+Also check the GUI: menu bar icon → **Preferences…** → **Agent** tab — both "GUI app" and "Agent (wwkd)" should show green ✅ checkmarks under "Accessibility Permission".
+
 ### Troubleshooting Permissions
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Window titles show "unavailable" | Accessibility not granted | Grant Accessibility to `WellWhaddyaKnow.app` (not `wwkd` directly) |
+| Window titles show "unavailable" | Agent missing Accessibility permission | Grant Accessibility to **both** `WellWhaddyaKnow.app` **and** `wwkd` (see above) |
+| GUI shows ✅ but agent shows ❌ | Only GUI app was added to Accessibility | Add the `wwkd` binary from inside the `.app` bundle (Step 7-10 above) |
 | Agent not running after reboot | Background item not allowed | Enable in System Settings → Login Items & Extensions |
 | `wwk doctor` shows agent not running | Plist not installed or agent crashed | Run `wwk agent install`, check `/tmp/com.daylily.wellwhaddyaknow.agent.stderr.log` |
-| Can't add `wwkd` to Accessibility | Binary lacks stable codesign identity | Add `WellWhaddyaKnow.app` instead — the agent inside it has the correct identity |
-| Permission granted but not working | Stale TCC cache | Toggle Accessibility OFF then ON, or restart your Mac |
+| Adding `wwkd` shows no change in list | Normal macOS behavior for agent binaries | The permission IS recorded by TCC even if not displayed — proceed anyway |
+| Permission granted but not working | Stale TCC cache | Toggle Accessibility OFF then ON for both items, or restart your Mac |
 
 ---
 
@@ -204,10 +234,12 @@ wwk agent install
 # Launch GUI (menu bar app)
 wwk gui
 
-# Grant Accessibility permission:
+# CRITICAL: Grant Accessibility to BOTH items:
 #   System Settings → Privacy & Security → Accessibility → +
-#   Navigate to: /opt/homebrew/opt/wwk/WellWhaddyaKnow.app
-#   (see Permissions section above for detailed steps)
+#   1. Add: /opt/homebrew/opt/wwk/WellWhaddyaKnow.app
+#   2. Add: /opt/homebrew/opt/wwk/WellWhaddyaKnow.app/Contents/MacOS/wwkd
+#   Toggle BOTH ON. Adding wwkd may show NO visual change — this is normal.
+#   (see Permissions section above for full details)
 
 # Verify everything works
 wwk doctor          # full health check
@@ -229,7 +261,7 @@ Click the eye icon in the menu bar to see real-time tracking status, current app
 
 Open the Viewer window to explore your time data. The **Reports** tab offers multiple visualization modes:
 
-**Hourly Bar Chart** — stacked bars showing time per app across each hour of the day:
+**Bar Chart** — stacked bars showing time per app segmented by time bucket (hour, day, week, or month):
 
 ![Hourly bar chart grouped by app](docs/images/report_bar_by_app.png)
 
@@ -262,8 +294,8 @@ Configure the app via **Preferences…** in the menu bar dropdown.
 | Tab | What it does |
 |-----|-------------|
 | **General** | Display timezone, polling interval, appearance |
-| **Permissions** | Accessibility permission status and setup guide |
-| **Diagnostics** | Live agent status, IPC health, database stats, event counts |
+| **Agent** | Agent status/controls (start/stop/restart/register), Accessibility permission setup |
+| **Diagnostics** | Read-only IPC health, database stats, permissions status |
 | **Data** | Database location, size, backup/reset options |
 | **About** | Version info, links, credits |
 
@@ -274,11 +306,11 @@ Configure the app via **Preferences…** in the menu bar dropdown.
 
 ![Preferences — General tab](docs/images/pref_general.png)
 
-**Permissions** — accessibility permission status and instructions:
+**Agent** — agent status, controls, and Accessibility permission setup:
 
-![Preferences — Permissions tab](docs/images/pref_permissions.png)
+![Preferences — Agent tab](docs/images/pref_permissions.png)
 
-**Diagnostics** — live agent, IPC, and database health:
+**Diagnostics** — read-only IPC, database, and permissions health:
 
 ![Preferences — Diagnostics tab](docs/images/pref_diagnostics.png)
 
