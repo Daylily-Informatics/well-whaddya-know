@@ -133,6 +133,27 @@ struct AccessibilityWarningView: View {
                 Text(warningText)
                     .font(.caption)
             }
+
+            Text("Add this app to System Settings → Privacy & Security → Accessibility:")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 4) {
+                Text(Bundle.main.bundlePath)
+                    .font(.system(.caption2, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(Bundle.main.bundlePath, forType: .string)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .buttonStyle(.borderless)
+                .font(.caption2)
+                .help("Copy path")
+            }
+
             Button("Open System Settings") {
                 onOpenSettings()
             }
