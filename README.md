@@ -48,6 +48,24 @@ A **local-only** macOS time tracker that records how time passed on your machine
 
 The `wwk` Homebrew formula installs **all three components** in a single command: the `wwk` CLI, the `wwkd` background agent, and the `WellWhaddyaKnow.app` menu bar GUI.
 
+### Quick Install (Automated Script)
+
+For a fully automated installation, use the quick install script:
+
+```bash
+# Clone the repo (or download the script directly)
+git clone https://github.com/Daylily-Informatics/well-whaddya-know.git
+cd well-whaddya-know
+
+# Run automated install (no prompts)
+./scripts/quick_install.sh
+
+# Or run in interactive mode (confirm each step)
+./scripts/quick_install.sh --interactive
+```
+
+The script automates all steps: tap, install, agent registration, GUI launch, and verification.
+
 ### Standard Install (admin user)
 
 Most macOS users have admin (sudo) access. This is the default Homebrew setup.
