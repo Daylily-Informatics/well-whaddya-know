@@ -115,9 +115,12 @@ func computeWorkingIntervals(
     clippedTo range: TimeInterval
 ) -> [TimeInterval] {
     guard !events.isEmpty else { return [] }
-    
-    // Sort events by timestamp
-    let sorted = events.sorted { $0.eventTsUs < $1.eventTsUs }
+
+    // Events arrive pre-sorted via ORDER BY from SQL.
+    // Assert in debug builds; no-op in release.
+    let sorted = events
+    assert(zip(sorted, sorted.dropFirst()).allSatisfy { $0.eventTsUs <= $1.eventTsUs },
+           "SystemStateEvents must be pre-sorted by eventTsUs")
     
     var intervals: [TimeInterval] = []
     var workingStart: Int64? = nil
@@ -162,10 +165,17 @@ func computeBaseSegments(
 ) -> [WorkingSegment] {
     guard !events.isEmpty, !workingIntervals.isEmpty else { return [] }
 
-    // Sort events by timestamp
-    let sorted = events.sorted { $0.eventTsUs < $1.eventTsUs }
+    // Events arrive pre-sorted via ORDER BY from SQL.
+    // Assert in debug builds; no-op in release.
+    let sorted = events
+    assert(zip(sorted, sorted.dropFirst()).allSatisfy { $0.eventTsUs <= $1.eventTsUs },
+           "RawActivityEvents must be pre-sorted by eventTsUs")
 
     var segments: [WorkingSegment] = []
+    // workingIntervals are sorted by startUs (produced by computeWorkingIntervals).
+    // Use a two-pointer approach: for each event, start scanning working intervals
+    // from where the previous event left off, since events are also time-sorted.
+    var wiStart = 0
 
     for i in 0..<sorted.count {
         let event = sorted[i]
@@ -180,11 +190,18 @@ func computeBaseSegments(
             eventEnd = range.endUs
         }
 
+        guard eventStart < eventEnd else { continue }
         let eventInterval = TimeInterval(startUs: eventStart, endUs: eventEnd)
 
-        // Intersect with each working interval
-        for workingInterval in workingIntervals {
-            if let intersection = eventInterval.intersection(with: workingInterval) {
+        // Advance wiStart past working intervals that end at or before eventStart
+        while wiStart < workingIntervals.count && workingIntervals[wiStart].endUs <= eventStart {
+            wiStart += 1
+        }
+
+        // Scan forward from wiStart; stop when working interval starts at or after eventEnd
+        var wi = wiStart
+        while wi < workingIntervals.count && workingIntervals[wi].startUs < eventEnd {
+            if let intersection = eventInterval.intersection(with: workingIntervals[wi]) {
                 if let clipped = intersection.intersection(with: range), !clipped.isEmpty {
                     segments.append(WorkingSegment(
                         interval: clipped,
@@ -198,6 +215,7 @@ func computeBaseSegments(
                     ))
                 }
             }
+            wi += 1
         }
     }
 
